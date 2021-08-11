@@ -140,26 +140,6 @@ pub const File = struct {
     /// of this linking operation.
     lock: ?Cache.Lock = null,
 
-    pub const LinkBlock = union {
-        elf: Elf.TextBlock,
-        coff: Coff.TextBlock,
-        macho: MachO.TextBlock,
-        plan9: Plan9.DeclBlock,
-        c: C.DeclBlock,
-        wasm: Wasm.DeclBlock,
-        spirv: void,
-    };
-
-    pub const LinkFn = union {
-        elf: Elf.SrcFn,
-        coff: Coff.SrcFn,
-        macho: MachO.SrcFn,
-        plan9: void,
-        c: C.FnBlock,
-        wasm: Wasm.FnData,
-        spirv: SpirV.FnData,
-    };
-
     pub const Export = union {
         elf: Elf.Export,
         coff: void,
@@ -314,8 +294,7 @@ pub const File = struct {
         }
     }
 
-    /// May be called before or after updateDeclExports but must be called
-    /// after allocateDeclIndexes for any given Decl.
+    /// May be called before or after `updateDeclExports` for any given `Decl`.
     pub fn updateDecl(base: *File, module: *Module, decl: *Module.Decl) !void {
         log.debug("updateDecl {*} ({s}), type={}", .{ decl, decl.name, decl.ty });
         assert(decl.has_tv);
@@ -332,8 +311,7 @@ pub const File = struct {
         }
     }
 
-    /// May be called before or after updateDeclExports but must be called
-    /// after allocateDeclIndexes for any given Decl.
+    /// May be called before or after `updateDeclExports` for any given `Decl`.
     pub fn updateFunc(base: *File, module: *Module, func: *Module.Fn, air: Air, liveness: Liveness) !void {
         log.debug("updateFunc {*} ({s}), type={}", .{
             func.owner_decl, func.owner_decl.name, func.owner_decl.ty,
@@ -363,21 +341,6 @@ pub const File = struct {
             .c => return @fieldParentPtr(C, "base", base).updateDeclLineNumber(module, decl),
             .plan9 => @panic("TODO: implement updateDeclLineNumber for plan9"),
             .wasm, .spirv => {},
-        }
-    }
-
-    /// Must be called before any call to updateDecl or updateDeclExports for
-    /// any given Decl.
-    pub fn allocateDeclIndexes(base: *File, decl: *Module.Decl) !void {
-        log.debug("allocateDeclIndexes {*} ({s})", .{ decl, decl.name });
-        switch (base.tag) {
-            .coff => return @fieldParentPtr(Coff, "base", base).allocateDeclIndexes(decl),
-            .elf => return @fieldParentPtr(Elf, "base", base).allocateDeclIndexes(decl),
-            .macho => return @fieldParentPtr(MachO, "base", base).allocateDeclIndexes(decl),
-            .c => return @fieldParentPtr(C, "base", base).allocateDeclIndexes(decl),
-            .wasm => return @fieldParentPtr(Wasm, "base", base).allocateDeclIndexes(decl),
-            .plan9 => return @fieldParentPtr(Plan9, "base", base).allocateDeclIndexes(decl),
-            .spirv => {},
         }
     }
 
@@ -510,8 +473,7 @@ pub const File = struct {
         }
     }
 
-    /// May be called before or after updateDecl, but must be called after
-    /// allocateDeclIndexes for any given Decl.
+    /// May be called before or after `updateDecl` for any given `Decl`.
     pub fn updateDeclExports(
         base: *File,
         module: *Module,

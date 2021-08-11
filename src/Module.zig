@@ -308,17 +308,6 @@ pub const Decl = struct {
     /// deletes the Decl on the spot.
     alive: bool,
 
-    /// Represents the position of the code in the output file.
-    /// This is populated regardless of semantic analysis and code generation.
-    link: link.File.LinkBlock,
-
-    /// Represents the function in the linked output file, if the `Decl` is a function.
-    /// This is stored here and not in `Fn` because `Decl` survives across updates but
-    /// `Fn` does not.
-    /// TODO Look into making `Fn` a longer lived structure and moving this field there
-    /// to save on memory usage.
-    fn_link: link.File.LinkFn,
-
     /// The shallow set of other decls whose typed_value could possibly change if this Decl's
     /// typed_value is modified.
     dependants: DepsTable = .{},
@@ -3128,10 +3117,6 @@ fn semaDecl(mod: *Module, decl: *Decl) !bool {
 
             const is_inline = decl_tv.ty.fnCallingConvention() == .Inline;
             if (!is_inline and decl_tv.ty.hasCodeGenBits()) {
-                // We don't fully codegen the decl until later, but we do need to reserve a global
-                // offset table index for it. This allows us to codegen decls out of dependency
-                // order, increasing how many computations can be done in parallel.
-                try mod.comp.bin_file.allocateDeclIndexes(decl);
                 try mod.comp.work_queue.writeItem(.{ .codegen_func = func });
                 if (type_changed and mod.emit_h != null) {
                     try mod.comp.work_queue.writeItem(.{ .emit_h_decl = decl });
@@ -3187,7 +3172,6 @@ fn semaDecl(mod: *Module, decl: *Decl) !bool {
     decl.generation = mod.generation;
 
     if (queue_linker_work and decl.ty.hasCodeGenBits()) {
-        try mod.comp.bin_file.allocateDeclIndexes(decl);
         try mod.comp.work_queue.writeItem(.{ .codegen_decl = decl });
 
         if (type_changed and mod.emit_h != null) {
@@ -3593,27 +3577,6 @@ pub fn clearDecl(
     if (decl.has_tv) {
         if (decl.ty.hasCodeGenBits()) {
             mod.comp.bin_file.freeDecl(decl);
-
-            // TODO instead of a union, put this memory trailing Decl objects,
-            // and allow it to be variably sized.
-            decl.link = switch (mod.comp.bin_file.tag) {
-                .coff => .{ .coff = link.File.Coff.TextBlock.empty },
-                .elf => .{ .elf = link.File.Elf.TextBlock.empty },
-                .macho => .{ .macho = link.File.MachO.TextBlock.empty },
-                .plan9 => .{ .plan9 = link.File.Plan9.DeclBlock.empty },
-                .c => .{ .c = link.File.C.DeclBlock.empty },
-                .wasm => .{ .wasm = link.File.Wasm.DeclBlock.empty },
-                .spirv => .{ .spirv = {} },
-            };
-            decl.fn_link = switch (mod.comp.bin_file.tag) {
-                .coff => .{ .coff = {} },
-                .elf => .{ .elf = link.File.Elf.SrcFn.empty },
-                .macho => .{ .macho = link.File.MachO.SrcFn.empty },
-                .plan9 => .{ .plan9 = {} },
-                .c => .{ .c = link.File.C.FnBlock.empty },
-                .wasm => .{ .wasm = link.File.Wasm.FnData.empty },
-                .spirv => .{ .spirv = .{} },
-            };
         }
         if (decl.getInnerNamespace()) |namespace| {
             try namespace.deleteAllDecls(mod, outdated_decls);
@@ -3631,20 +3594,6 @@ pub fn clearDecl(
 
 pub fn deleteUnusedDecl(mod: *Module, decl: *Decl) void {
     log.debug("deleteUnusedDecl {*} ({s})", .{ decl, decl.name });
-
-    // TODO: remove `allocateDeclIndexes` and make the API that the linker backends
-    // are required to notice the first time `updateDecl` happens and keep track
-    // of it themselves. However they can rely on getting a `freeDecl` call if any
-    // `updateDecl` or `updateFunc` calls happen. This will allow us to avoid any call
-    // into the linker backend here, since the linker backend will never have been told
-    // about the Decl in the first place.
-    // Until then, we did call `allocateDeclIndexes` on this anonymous Decl and so we
-    // must call `freeDecl` in the linker backend now.
-    if (decl.has_tv) {
-        if (decl.ty.hasCodeGenBits()) {
-            mod.comp.bin_file.freeDecl(decl);
-        }
-    }
 
     const dependants = decl.dependants.keys();
     assert(dependants[0].namespace.anon_decls.swapRemove(decl));
@@ -3870,24 +3819,6 @@ pub fn allocateNewDecl(mod: *Module, namespace: *Scope.Namespace, src_node: ast.
         .analysis = .unreferenced,
         .deletion_flag = false,
         .zir_decl_index = 0,
-        .link = switch (mod.comp.bin_file.tag) {
-            .coff => .{ .coff = link.File.Coff.TextBlock.empty },
-            .elf => .{ .elf = link.File.Elf.TextBlock.empty },
-            .macho => .{ .macho = link.File.MachO.TextBlock.empty },
-            .plan9 => .{ .plan9 = link.File.Plan9.DeclBlock.empty },
-            .c => .{ .c = link.File.C.DeclBlock.empty },
-            .wasm => .{ .wasm = link.File.Wasm.DeclBlock.empty },
-            .spirv => .{ .spirv = {} },
-        },
-        .fn_link = switch (mod.comp.bin_file.tag) {
-            .coff => .{ .coff = {} },
-            .elf => .{ .elf = link.File.Elf.SrcFn.empty },
-            .macho => .{ .macho = link.File.MachO.SrcFn.empty },
-            .plan9 => .{ .plan9 = {} },
-            .c => .{ .c = link.File.C.FnBlock.empty },
-            .wasm => .{ .wasm = link.File.Wasm.FnData.empty },
-            .spirv => .{ .spirv = .{} },
-        },
         .generation = 0,
         .is_pub = false,
         .is_exported = false,
@@ -4030,11 +3961,7 @@ pub fn createAnonymousDeclFromDeclNamed(
 
     namespace.anon_decls.putAssumeCapacityNoClobber(new_decl, {});
 
-    // TODO: This generates the Decl into the machine code file if it is of a
-    // type that is non-zero size. We should be able to further improve the
-    // compiler to omit Decls which are only referenced at compile-time and not runtime.
     if (typed_value.ty.hasCodeGenBits()) {
-        try mod.comp.bin_file.allocateDeclIndexes(new_decl);
         try mod.comp.work_queue.writeItem(.{ .codegen_decl = new_decl });
     }
 
