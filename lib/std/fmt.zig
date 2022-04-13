@@ -963,17 +963,16 @@ pub fn formatAsciiChar(
 }
 
 pub fn formatUnicodeCodepoint(
-    c: u21,
+    c: unicode.Codepoint,
     options: FormatOptions,
     writer: anytype,
 ) !void {
     var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(c, &buf) catch |err| switch (err) {
-        error.Utf8CannotEncodeSurrogateHalf, error.CodepointTooLarge => {
-            // In case of error output the replacement char U+FFFD
-            return formatBuf(&[_]u8{ 0xef, 0xbf, 0xbd }, options, writer);
-        },
+    const char = unicode.Char.init(c) catch {
+        const len = unicode.replacement_character.utf8Encode(&buf);
+        return formatBuf(buf[0..len], options, writer);
     };
+    const len = char.utf8Encode(&buf);
     return formatBuf(buf[0..len], options, writer);
 }
 
@@ -2019,15 +2018,15 @@ test "int.specifier" {
         try expectFmt("UTF-8: a\n", "UTF-8: {u}\n", .{value});
     }
     {
-        const value: u21 = 0x1F310;
+        const value: std.unicode.Codepoint = 0x1F310;
         try expectFmt("UTF-8: 🌐\n", "UTF-8: {u}\n", .{value});
     }
     {
-        const value: u21 = 0xD800;
+        const value: std.unicode.Codepoint = 0xD800;
         try expectFmt("UTF-8: �\n", "UTF-8: {u}\n", .{value});
     }
     {
-        const value: u21 = 0x110001;
+        const value: std.unicode.Codepoint = 0x110001;
         try expectFmt("UTF-8: �\n", "UTF-8: {u}\n", .{value});
     }
 }

@@ -49,18 +49,19 @@ fn encodesTo(decoded: []const u8, encoded: []const u8) bool {
                 j += 2;
                 i += 1;
             } else {
-                var codepoint = std.fmt.parseInt(u21, encoded[j + 2 .. j + 6], 16) catch unreachable;
+                var codepoint = std.fmt.parseInt(std.unicode.Codepoint, encoded[j + 2 .. j + 6], 16) catch unreachable;
                 j += 6;
                 if (codepoint >= 0xD800 and codepoint < 0xDC00) {
                     // surrogate pair
                     assert(encoded[j] == '\\');
                     assert(encoded[j + 1] == 'u');
-                    const low_surrogate = std.fmt.parseInt(u21, encoded[j + 2 .. j + 6], 16) catch unreachable;
+                    const low_surrogate = std.fmt.parseInt(std.unicode.Codepoint, encoded[j + 2 .. j + 6], 16) catch unreachable;
                     codepoint = 0x10000 + (((codepoint & 0x03ff) << 10) | (low_surrogate & 0x03ff));
                     j += 6;
                 }
+                const char = std.unicode.Char{ .codepoint = codepoint };
                 var buf: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(codepoint, &buf) catch unreachable;
+                const len = char.utf8Encode(&buf);
                 if (i + len > decoded.len) return false;
                 if (!mem.eql(u8, decoded[i .. i + len], buf[0..len])) return false;
                 i += len;
@@ -219,7 +220,7 @@ pub const StreamingParser = struct {
     // When in .String states, was the previous character a high surrogate?
     string_last_was_high_surrogate: bool,
     // Used inside of StringEscapeHexUnicode* states
-    string_unicode_codepoint: u21,
+    string_unicode_codepoint: std.unicode.Codepoint,
     // The first byte needs to be stored to validate 3- and 4-byte sequences.
     sequence_first_byte: u8 = undefined,
     // When in .Number states, is the number a (still) valid integer?
@@ -768,7 +769,7 @@ pub const StreamingParser = struct {
             },
 
             .StringEscapeHexUnicode4 => {
-                var codepoint: u21 = undefined;
+                var codepoint: std.unicode.Codepoint = undefined;
                 switch (c) {
                     else => return error.InvalidUnicodeHexSymbol,
                     '0'...'9' => {
@@ -786,7 +787,7 @@ pub const StreamingParser = struct {
             },
 
             .StringEscapeHexUnicode3 => {
-                var codepoint: u21 = undefined;
+                var codepoint: std.unicode.Codepoint = undefined;
                 switch (c) {
                     else => return error.InvalidUnicodeHexSymbol,
                     '0'...'9' => {
@@ -804,7 +805,7 @@ pub const StreamingParser = struct {
             },
 
             .StringEscapeHexUnicode2 => {
-                var codepoint: u21 = undefined;
+                var codepoint: std.unicode.Codepoint = undefined;
                 switch (c) {
                     else => return error.InvalidUnicodeHexSymbol,
                     '0'...'9' => {
@@ -822,7 +823,7 @@ pub const StreamingParser = struct {
             },
 
             .StringEscapeHexUnicode1 => {
-                var codepoint: u21 = undefined;
+                var codepoint: std.unicode.Codepoint = undefined;
                 switch (c) {
                     else => return error.InvalidUnicodeHexSymbol,
                     '0'...'9' => {
@@ -839,7 +840,8 @@ pub const StreamingParser = struct {
                 p.string_unicode_codepoint |= codepoint;
                 if (p.string_unicode_codepoint < 0xD800 or p.string_unicode_codepoint >= 0xE000) {
                     // not part of surrogate pair
-                    p.string_escapes.Some.size_diff -= @as(isize, 6 - (std.unicode.utf8CodepointSequenceLength(p.string_unicode_codepoint) catch unreachable));
+                    const char = std.unicode.Char{ .codepoint = p.string_unicode_codepoint };
+                    p.string_escapes.Some.size_diff -= @as(isize, 6 - char.utf8CodepointSequenceLength());
                     p.string_last_was_high_surrogate = false;
                 } else if (p.string_unicode_codepoint < 0xDC00) {
                     // 'high' surrogate
@@ -2642,12 +2644,13 @@ pub fn unescapeValidString(output: []u8, input: []const u8) UnescapeValidStringE
             const firstCodeUnit = std.fmt.parseInt(u16, input[inIndex + 2 .. inIndex + 6], 16) catch unreachable;
 
             // guess optimistically that it's not a surrogate pair
-            if (std.unicode.utf8Encode(firstCodeUnit, output[outIndex..])) |byteCount| {
+            if (std.unicode.Char.init(firstCodeUnit)) |char| {
+                const byteCount = char.utf8Encode(output[outIndex..]);
                 outIndex += byteCount;
                 inIndex += 6;
             } else |err| {
                 // it might be a surrogate pair
-                if (err != error.Utf8CannotEncodeSurrogateHalf) {
+                if (err != error.SurrogateHalf) {
                     return error.InvalidUnicodeHexSymbol;
                 }
                 // check if a second code unit is present
@@ -2941,7 +2944,7 @@ pub const StringifyOptions = struct {
 };
 
 fn outputUnicodeEscape(
-    codepoint: u21,
+    codepoint: std.unicode.Codepoint,
     out_stream: anytype,
 ) !void {
     if (codepoint <= 0xFFFF) {
@@ -3110,8 +3113,8 @@ pub fn stringify(
                                 const ulen = std.unicode.utf8ByteSequenceLength(value[i]) catch unreachable;
                                 // control characters (only things left with 1 byte length) should always be printed as unicode escapes
                                 if (ulen == 1 or options.string.String.escape_unicode) {
-                                    const codepoint = std.unicode.utf8Decode(value[i .. i + ulen]) catch unreachable;
-                                    try outputUnicodeEscape(codepoint, out_stream);
+                                    const char = std.unicode.Char.utf8Decode(value[i .. i + ulen]) catch unreachable;
+                                    try outputUnicodeEscape(char.codepoint, out_stream);
                                 } else {
                                     try out_stream.writeAll(value[i .. i + ulen]);
                                 }

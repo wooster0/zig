@@ -1446,16 +1446,16 @@ pub const Tokenizer = struct {
             const bytes = self.buffer[self.index .. self.index + length];
             switch (length) {
                 2 => {
-                    const value = std.unicode.utf8Decode2(bytes) catch return length;
-                    if (value == 0x85) return length; // U+0085 (NEL)
+                    const char = std.unicode.Char.utf8Decode2(bytes) catch return length;
+                    if (char.codepoint == 0x85) return length; // U+0085 (NEL)
                 },
                 3 => {
-                    const value = std.unicode.utf8Decode3(bytes) catch return length;
-                    if (value == 0x2028) return length; // U+2028 (LS)
-                    if (value == 0x2029) return length; // U+2029 (PS)
+                    const char = std.unicode.Char.utf8Decode3(bytes) catch return length;
+                    if (char.codepoint == 0x2028) return length; // U+2028 (LS)
+                    if (char.codepoint == 0x2029) return length; // U+2029 (PS)
                 },
                 4 => {
-                    _ = std.unicode.utf8Decode4(bytes) catch return length;
+                    _ = std.unicode.Char.utf8Decode4(bytes) catch return length;
                 },
                 else => unreachable,
             }

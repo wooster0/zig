@@ -1,7 +1,6 @@
 const std = @import("../std.zig");
 const assert = std.debug.assert;
-const utf8Decode = std.unicode.utf8Decode;
-const utf8Encode = std.unicode.utf8Encode;
+const unicode = std.unicode;
 
 pub const ParseError = error{
     OutOfMemory,
@@ -9,7 +8,7 @@ pub const ParseError = error{
 };
 
 pub const ParsedCharLiteral = union(enum) {
-    success: u21,
+    success: unicode.Char,
     failure: Error,
 };
 
@@ -55,8 +54,8 @@ pub fn parseCharLiteral(slice: []const u8) ParsedCharLiteral {
         },
         0 => return .{ .failure = .{ .invalid_character = 1 } },
         else => {
-            const codepoint = utf8Decode(slice[1 .. slice.len - 1]) catch unreachable;
-            return .{ .success = codepoint };
+            const char = unicode.Char.utf8Decode(slice[1 .. slice.len - 1]) catch unreachable;
+            return .{ .success = char };
         },
     }
 }
@@ -72,12 +71,12 @@ fn parseEscapeSequence(slice: []const u8, offset: *usize) ParsedCharLiteral {
 
     offset.* += 2;
     switch (slice[offset.* - 1]) {
-        'n' => return .{ .success = '\n' },
-        'r' => return .{ .success = '\r' },
-        '\\' => return .{ .success = '\\' },
-        't' => return .{ .success = '\t' },
-        '\'' => return .{ .success = '\'' },
-        '"' => return .{ .success = '"' },
+        'n' => return .{ .success = .{ .codepoint = '\n' } },
+        'r' => return .{ .success = .{ .codepoint = '\r' } },
+        '\\' => return .{ .success = .{ .codepoint = '\\' } },
+        't' => return .{ .success = .{ .codepoint = '\t' } },
+        '\'' => return .{ .success = .{ .codepoint = '\'' } },
+        '"' => return .{ .success = .{ .codepoint = '"' } },
         'x' => {
             var value: u8 = 0;
             var i: usize = offset.*;
@@ -104,7 +103,7 @@ fn parseEscapeSequence(slice: []const u8, offset: *usize) ParsedCharLiteral {
                 }
             }
             offset.* = i;
-            return .{ .success = value };
+            return .{ .success = .{ .codepoint = value } };
         },
         'u' => {
             var i: usize = offset.*;
@@ -142,7 +141,7 @@ fn parseEscapeSequence(slice: []const u8, offset: *usize) ParsedCharLiteral {
                 return .{ .failure = .{ .expected_rbrace = i } };
             }
             offset.* = i;
-            return .{ .success = @intCast(u21, value) };
+            return .{ .success = .{ .codepoint = @intCast(unicode.Codepoint, value) } };
         },
         else => return .{ .failure = .{ .invalid_escape_character = offset.* - 1 } },
     }
@@ -150,43 +149,43 @@ fn parseEscapeSequence(slice: []const u8, offset: *usize) ParsedCharLiteral {
 
 test "parseCharLiteral" {
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 'a' },
+        ParsedCharLiteral{ .success = .{ .codepoint = 'a' } },
         parseCharLiteral("'a'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 'ä' },
+        ParsedCharLiteral{ .success = .{ .codepoint = 'ä' } },
         parseCharLiteral("'ä'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0 },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0 } },
         parseCharLiteral("'\\x00'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0x4f },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0x4f } },
         parseCharLiteral("'\\x4f'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0x4f },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0x4f } },
         parseCharLiteral("'\\x4F'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0x3041 },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0x3041 } },
         parseCharLiteral("'ぁ'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0 },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0 } },
         parseCharLiteral("'\\u{0}'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0x3041 },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0x3041 } },
         parseCharLiteral("'\\u{3041}'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0x7f },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0x7f } },
         parseCharLiteral("'\\u{7f}'"),
     );
     try std.testing.expectEqual(
-        ParsedCharLiteral{ .success = 0x7fff },
+        ParsedCharLiteral{ .success = .{ .codepoint = 0x7fff } },
         parseCharLiteral("'\\u{7FFF}'"),
     );
     try std.testing.expectEqual(
@@ -246,13 +245,11 @@ pub fn parseAppend(buf: *std.ArrayList(u8), bytes: []const u8) error{OutOfMemory
                 const escape_char_index = index + 1;
                 const result = parseEscapeSequence(bytes, &index);
                 switch (result) {
-                    .success => |codepoint| {
+                    .success => |char| {
                         if (bytes[escape_char_index] == 'u') {
-                            buf.items.len += utf8Encode(codepoint, buf.unusedCapacitySlice()) catch {
-                                return Result{ .failure = .{ .invalid_unicode_codepoint = escape_char_index + 1 } };
-                            };
+                            buf.items.len += char.utf8Encode(buf.unusedCapacitySlice()); // point out that this is a prime example
                         } else {
-                            buf.appendAssumeCapacity(@intCast(u8, codepoint));
+                            buf.appendAssumeCapacity(@intCast(u8, char.codepoint));
                         }
                     },
                     .failure => |err| return Result{ .failure = err },
