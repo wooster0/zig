@@ -836,7 +836,7 @@ fn formatSliceEscapeImpl(comptime case: Case) type {
             buf[1] = 'x';
 
             for (bytes) |c| {
-                if (std.ascii.isPrint(c)) {
+                if (std.ascii.isPrintable(c)) {
                     try writer.writeByte(c);
                 } else {
                     buf[2] = charset[c >> 4];

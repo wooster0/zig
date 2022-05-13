@@ -1,17 +1,21 @@
-// Does NOT look at the locale the way C89's toupper(3), isspace() et cetera does.
-// I could have taken only a u7 to make this clear, but it would be slower
-// It is my opinion that encodings other than UTF-8 should not be supported.
-//
-// (and 128 bytes is not much to pay).
-// Also does not handle Unicode character classes.
-//
-// https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/USASCII_code_chart.png/1200px-USASCII_code_chart.png
+//! The 7-bit [ASCII](https://en.wikipedia.org/wiki/ASCII) character encoding standard.
+//!
+//! This is not to be confused with the 8-bit [Extended ASCII](https://en.wikipedia.org/wiki/Extended_ASCII).
+//!
+//! Even though this module concerns itself with 7-bit ASCII,
+//! functions use `u8` as the type instead of `u7` for convenience and compatibility.
+//! Characters outside of the 7-bit range are gracefully handled (e.g. by returning `false`).
+//!
+//! See also: https://en.wikipedia.org/wiki/ASCII#Character_set
 
 const std = @import("std");
+const mem = std.mem;
+const testing = std.testing;
 
 /// Contains constants for the C0 control codes of the ASCII encoding.
-/// https://en.wikipedia.org/wiki/C0_and_C1_control_codes
-pub const control_code = struct {
+///
+/// See also: https://en.wikipedia.org/wiki/C0_and_C1_control_codes and `is_control`
+pub const control = struct {
     pub const NUL = 0x00;
     pub const SOH = 0x01;
     pub const STX = 0x02;
@@ -47,248 +51,242 @@ pub const control_code = struct {
 
     pub const DEL = 0x7F;
 
+    /// An alias to `DC1`.
     pub const XON = 0x11;
+    /// An alias to `DC3`.
     pub const XOFF = 0x13;
 };
 
-const tIndex = enum(u3) {
-    Alpha,
-    Hex,
-    Space,
-    Digit,
-    Lower,
-    Upper,
-    // Ctrl, < 0x20 || == DEL
-    // Print, = Graph || == ' '. NOT '\t' et cetera
-    Punct,
-    Graph,
-    //ASCII, | ~0b01111111
-    //isBlank, == ' ' || == '\x09'
-};
+// These naive functions are used to generate the lookup table
+// and as fallbacks for if the lookup table isn't available.
+//
+// Note that some functions like for example `isDigit` don't use a table because it's slower.
+// Using a table is generally only useful if not all `true` values in the table would be in one row.
 
-const combinedTable = init: {
-    comptime var table: [256]u8 = undefined;
+fn isControlNaive(char: u8) bool {
+    return char <= control.US or char == control.DEL;
+}
+fn isAlphabeticNaive(char: u8) bool {
+    return isLower(char) or isUpper(char);
+}
+fn isHexadecimalNaive(char: u8) bool {
+    return isDigit(char) or
+        (char >= 'a' and char <= 'f') or
+        (char >= 'A' and char <= 'F');
+}
+fn isAlphanumericNaive(char: u8) bool {
+    return isDigit(char) or isAlphabeticNaive(char);
+}
+fn isWhitespaceNaive(char: u8) bool {
+    @setEvalBranchQuota(5000);
+    return mem.indexOfScalar(u8, &whitespace, char) != null;
+}
 
-    const mem = std.mem;
+/// A lookup table.
+const CombinedTable = struct {
+    table: [256]u8,
 
-    const alpha = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-    };
-    const lower = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-    };
-    const upper = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    };
-    const digit = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    };
-    const hex = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-
-        0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    };
-    const space = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    };
-    const punct = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1,
-
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1,
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0,
-    };
-    const graph = [_]u1{
-        //  0, 1, 2, 3, 4, 5, 6, 7 ,8, 9,10,11,12,13,14,15
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    const Index = enum {
+        control,
+        alphabetic,
+        hexadecimal,
+        alphanumeric,
+        whitespace,
     };
 
-    comptime var i = 0;
-    inline while (i < 128) : (i += 1) {
-        table[i] =
-            @as(u8, alpha[i]) << @enumToInt(tIndex.Alpha) |
-            @as(u8, hex[i]) << @enumToInt(tIndex.Hex) |
-            @as(u8, space[i]) << @enumToInt(tIndex.Space) |
-            @as(u8, digit[i]) << @enumToInt(tIndex.Digit) |
-            @as(u8, lower[i]) << @enumToInt(tIndex.Lower) |
-            @as(u8, upper[i]) << @enumToInt(tIndex.Upper) |
-            @as(u8, punct[i]) << @enumToInt(tIndex.Punct) |
-            @as(u8, graph[i]) << @enumToInt(tIndex.Graph);
+    /// Generates a table which is filled with the results of the given function for all characters.
+    fn getBoolTable(comptime condition: fn (u8) bool) [128]bool {
+        @setEvalBranchQuota(2000);
+        comptime var table: [128]bool = undefined;
+        comptime var index = 0;
+        while (index < 128) : (index += 1) {
+            table[index] = condition(index);
+        }
+        return table;
     }
-    mem.set(u8, table[128..256], 0);
-    break :init table;
+
+    fn init() CombinedTable {
+        comptime var table: [256]u8 = undefined;
+
+        const control_table = comptime getBoolTable(isControlNaive);
+        const alpha_table = comptime getBoolTable(isAlphabeticNaive);
+        const hex_table = comptime getBoolTable(isHexadecimalNaive);
+        const alphanumeric_table = comptime getBoolTable(isAlphanumericNaive);
+        const whitespace_table = comptime getBoolTable(isWhitespaceNaive);
+
+        comptime var i = 0;
+        inline while (i < 128) : (i += 1) {
+            table[i] =
+                @boolToInt(control_table[i]) << @enumToInt(Index.control) |
+                @boolToInt(alpha_table[i]) << @enumToInt(Index.alphabetic) |
+                @boolToInt(hex_table[i]) << @enumToInt(Index.hexadecimal) |
+                @boolToInt(alphanumeric_table[i]) << @enumToInt(Index.alphanumeric) |
+                @boolToInt(whitespace_table[i]) << @enumToInt(Index.whitespace);
+        }
+
+        mem.set(u8, table[128..256], 0);
+
+        return .{ .table = table };
+    }
+
+    fn contains(self: CombinedTable, char: u8, index: Index) bool {
+        return (self.table[char] & (@as(u8, 1) << @enumToInt(index))) != 0;
+    }
 };
 
-fn inTable(c: u8, t: tIndex) bool {
-    return (combinedTable[c] & (@as(u8, 1) << @enumToInt(t))) != 0;
+/// The combined table for fast lookup.
+///
+/// This is not used in `ReleaseSmall` to save 256 bytes at the cost of
+/// a small decrease in performance.
+const combined_table: ?CombinedTable = if (@import("builtin").mode == .ReleaseSmall)
+    null
+else
+    CombinedTable.init();
+
+/// Returns whether the character is a control character.
+///
+/// See also: `control`
+pub fn isControl(char: u8) bool {
+    if (combined_table) |table|
+        return table.contains(char, .control)
+    else
+        return isControlNaive(char);
 }
 
-pub fn isAlNum(c: u8) bool {
-    return (combinedTable[c] & ((@as(u8, 1) << @enumToInt(tIndex.Alpha)) |
-        @as(u8, 1) << @enumToInt(tIndex.Digit))) != 0;
+/// Returns whether the character is alphanumeric. This is case-insensitive.
+pub fn isAlphanumeric(char: u8) bool {
+    if (combined_table) |table|
+        return table.contains(char, .alphanumeric)
+    else
+        return isAlphanumericNaive(char);
 }
 
-pub fn isAlpha(c: u8) bool {
-    return inTable(c, tIndex.Alpha);
+/// Returns whether the character is alphabetic. This is case-insensitive.
+pub fn isAlphabetic(char: u8) bool {
+    if (combined_table) |table|
+        return table.contains(char, .alphabetic)
+    else
+        return isAlphabeticNaive(char);
 }
 
-pub fn isCntrl(c: u8) bool {
-    return c < 0x20 or c == 127; //DEL
+pub fn isDigit(char: u8) bool {
+    return char >= '0' and char <= '9';
 }
 
-pub fn isDigit(c: u8) bool {
-    return inTable(c, tIndex.Digit);
+/// Returns whether the character has some graphical representation and can be printed.
+pub fn isPrintable(char: u8) bool {
+    return char >= ' ' and char <= '~';
 }
 
-pub fn isGraph(c: u8) bool {
-    return inTable(c, tIndex.Graph);
+pub fn isLower(char: u8) bool {
+    return char >= 'a' and char <= 'z';
 }
 
-pub fn isLower(c: u8) bool {
-    return inTable(c, tIndex.Lower);
+pub fn isUpper(char: u8) bool {
+    return char >= 'A' and char <= 'Z';
 }
 
-pub fn isPrint(c: u8) bool {
-    return inTable(c, tIndex.Graph) or c == ' ';
+pub fn isWhitespace(char: u8) bool {
+    if (combined_table) |table|
+        return table.contains(char, .whitespace)
+    else
+        return isWhitespaceNaive(char);
 }
 
-pub fn isPunct(c: u8) bool {
-    return inTable(c, tIndex.Punct);
-}
+/// All the values for which `isWhitespace()` returns `true`.
+/// This may be used with e.g. `std.mem.trim()` to trim whitespace.
+pub const whitespace = [_]u8{ ' ', '\t', '\n', '\r', control.VT, control.FF };
 
-pub fn isSpace(c: u8) bool {
-    return inTable(c, tIndex.Space);
-}
-
-/// All the values for which isSpace() returns true. This may be used with
-/// e.g. std.mem.trim() to trim whiteSpace.
-pub const spaces = [_]u8{ ' ', '\t', '\n', '\r', control_code.VT, control_code.FF };
-
-test "spaces" {
-    const testing = std.testing;
-    for (spaces) |space| try testing.expect(isSpace(space));
+test "whitespace" {
+    for (whitespace) |char| try testing.expect(isWhitespace(char));
 
     var i: u8 = 0;
     while (isASCII(i)) : (i += 1) {
-        if (isSpace(i)) try testing.expect(std.mem.indexOfScalar(u8, &spaces, i) != null);
+        if (isWhitespace(i)) try testing.expect(mem.indexOfScalar(u8, &whitespace, i) != null);
     }
 }
 
-pub fn isUpper(c: u8) bool {
-    return inTable(c, tIndex.Upper);
+/// Returns whether the character is a hexadecimal digit. This is case-insensitive.
+pub fn isHexadecimal(char: u8) bool {
+    if (combined_table) |table|
+        return table.contains(char, .hexadecimal)
+    else
+        return isHexadecimalNaive(char);
 }
 
-pub fn isXDigit(c: u8) bool {
-    return inTable(c, tIndex.Hex);
+pub fn isASCII(char: u8) bool {
+    return char < 128;
 }
 
-pub fn isASCII(c: u8) bool {
-    return c < 128;
-}
-
-pub fn isBlank(c: u8) bool {
-    return (c == ' ') or (c == '\x09');
-}
-
-pub fn toUpper(c: u8) u8 {
-    if (isLower(c)) {
-        return c & 0b11011111;
+pub fn toUpper(char: u8) u8 {
+    if (isLower(char)) {
+        return char & 0b11011111;
     } else {
-        return c;
+        return char;
     }
 }
 
-pub fn toLower(c: u8) u8 {
-    if (isUpper(c)) {
-        return c | 0b00100000;
+pub fn toLower(char: u8) u8 {
+    if (isUpper(char)) {
+        return char | 0b00100000;
     } else {
-        return c;
+        return char;
     }
 }
 
 test "ascii character classes" {
-    const testing = std.testing;
+    try testing.expect(!isControl('a'));
+    try testing.expect(!isControl('z'));
+    try testing.expect(isControl(control.NUL));
+    try testing.expect(isControl(control.FF));
+    try testing.expect(isControl(control.US));
 
     try testing.expect('C' == toUpper('c'));
     try testing.expect(':' == toUpper(':'));
     try testing.expect('\xab' == toUpper('\xab'));
+    try testing.expect(!isUpper('z'));
+
     try testing.expect('c' == toLower('C'));
-    try testing.expect(isAlpha('c'));
-    try testing.expect(!isAlpha('5'));
-    try testing.expect(isSpace(' '));
+    try testing.expect(':' == toLower(':'));
+    try testing.expect('\xab' == toLower('\xab'));
+    try testing.expect(!isLower('Z'));
+
+    try testing.expect(isAlphanumeric('Z'));
+    try testing.expect(isAlphanumeric('z'));
+    try testing.expect(isAlphanumeric('5'));
+    try testing.expect(isAlphanumeric('5'));
+    try testing.expect(!isAlphanumeric('!'));
+
+    try testing.expect(!isAlphabetic('5'));
+    try testing.expect(isAlphabetic('c'));
+    try testing.expect(!isAlphabetic('5'));
+
+    try testing.expect(isWhitespace(' '));
+    try testing.expect(isWhitespace('\t'));
+    try testing.expect(isWhitespace('\r'));
+    try testing.expect(isWhitespace('\n'));
+    try testing.expect(!isWhitespace('.'));
+
+    try testing.expect(!isHexadecimal('g'));
+    try testing.expect(isHexadecimal('b'));
+    try testing.expect(isHexadecimal('9'));
+
+    try testing.expect(!isDigit('~'));
+    try testing.expect(isDigit('0'));
+    try testing.expect(isDigit('9'));
+
+    try testing.expect(isPrintable(' '));
+    try testing.expect(isPrintable('@'));
+    try testing.expect(isPrintable('~'));
+    try testing.expect(!isPrintable(control.ESC));
 }
 
 /// Writes a lower case copy of `ascii_string` to `output`.
 /// Asserts `output.len >= ascii_string.len`.
 pub fn lowerString(output: []u8, ascii_string: []const u8) []u8 {
     std.debug.assert(output.len >= ascii_string.len);
-    for (ascii_string) |c, i| {
-        output[i] = toLower(c);
+    for (ascii_string) |char, i| {
+        output[i] = toLower(char);
     }
     return output[0..ascii_string.len];
 }
@@ -296,28 +294,28 @@ pub fn lowerString(output: []u8, ascii_string: []const u8) []u8 {
 test "lowerString" {
     var buf: [1024]u8 = undefined;
     const result = lowerString(&buf, "aBcDeFgHiJkLmNOPqrst0234+💩!");
-    try std.testing.expectEqualStrings("abcdefghijklmnopqrst0234+💩!", result);
+    try testing.expectEqualStrings("abcdefghijklmnopqrst0234+💩!", result);
 }
 
 /// Allocates a lower case copy of `ascii_string`.
 /// Caller owns returned string and must free with `allocator`.
-pub fn allocLowerString(allocator: std.mem.Allocator, ascii_string: []const u8) ![]u8 {
+pub fn allocLowerString(allocator: mem.Allocator, ascii_string: []const u8) ![]u8 {
     const result = try allocator.alloc(u8, ascii_string.len);
     return lowerString(result, ascii_string);
 }
 
 test "allocLowerString" {
-    const result = try allocLowerString(std.testing.allocator, "aBcDeFgHiJkLmNOPqrst0234+💩!");
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("abcdefghijklmnopqrst0234+💩!", result);
+    const result = try allocLowerString(testing.allocator, "aBcDeFgHiJkLmNOPqrst0234+💩!");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("abcdefghijklmnopqrst0234+💩!", result);
 }
 
 /// Writes an upper case copy of `ascii_string` to `output`.
 /// Asserts `output.len >= ascii_string.len`.
 pub fn upperString(output: []u8, ascii_string: []const u8) []u8 {
     std.debug.assert(output.len >= ascii_string.len);
-    for (ascii_string) |c, i| {
-        output[i] = toUpper(c);
+    for (ascii_string) |char, i| {
+        output[i] = toUpper(char);
     }
     return output[0..ascii_string.len];
 }
@@ -325,84 +323,83 @@ pub fn upperString(output: []u8, ascii_string: []const u8) []u8 {
 test "upperString" {
     var buf: [1024]u8 = undefined;
     const result = upperString(&buf, "aBcDeFgHiJkLmNOPqrst0234+💩!");
-    try std.testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRST0234+💩!", result);
+    try testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRST0234+💩!", result);
 }
 
 /// Allocates an upper case copy of `ascii_string`.
 /// Caller owns returned string and must free with `allocator`.
-pub fn allocUpperString(allocator: std.mem.Allocator, ascii_string: []const u8) ![]u8 {
+pub fn allocUpperString(allocator: mem.Allocator, ascii_string: []const u8) ![]u8 {
     const result = try allocator.alloc(u8, ascii_string.len);
     return upperString(result, ascii_string);
 }
 
 test "allocUpperString" {
-    const result = try allocUpperString(std.testing.allocator, "aBcDeFgHiJkLmNOPqrst0234+💩!");
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRST0234+💩!", result);
+    const result = try allocUpperString(testing.allocator, "aBcDeFgHiJkLmNOPqrst0234+💩!");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRST0234+💩!", result);
 }
 
-/// Compares strings `a` and `b` case insensitively and returns whether they are equal.
-pub fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+/// Compares strings `a` and `b` case-insensitively and returns whether they are equal.
+pub fn eqlInsensitive(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
-    for (a) |a_c, i| {
-        if (toLower(a_c) != toLower(b[i])) return false;
+    for (a) |a_char, i| {
+        if (toLower(a_char) != toLower(b[i])) return false;
     }
     return true;
 }
 
-test "eqlIgnoreCase" {
-    try std.testing.expect(eqlIgnoreCase("HEl💩Lo!", "hel💩lo!"));
-    try std.testing.expect(!eqlIgnoreCase("hElLo!", "hello! "));
-    try std.testing.expect(!eqlIgnoreCase("hElLo!", "helro!"));
+test "eqlInsensitive" {
+    try testing.expect(eqlInsensitive("HEl💩Lo!", "hel💩lo!"));
+    try testing.expect(!eqlInsensitive("hElLo!", "hello! "));
+    try testing.expect(!eqlInsensitive("hElLo!", "helro!"));
 }
 
-pub fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    return if (needle.len > haystack.len) false else eqlIgnoreCase(haystack[0..needle.len], needle);
+pub fn startsWithInsensitive(haystack: []const u8, needle: []const u8) bool {
+    return if (needle.len > haystack.len) false else eqlInsensitive(haystack[0..needle.len], needle);
 }
 
-test "ascii.startsWithIgnoreCase" {
-    try std.testing.expect(startsWithIgnoreCase("boB", "Bo"));
-    try std.testing.expect(!startsWithIgnoreCase("Needle in hAyStAcK", "haystack"));
+test "ascii.startsWithInsensitive" {
+    try testing.expect(startsWithInsensitive("boB", "Bo"));
+    try testing.expect(!startsWithInsensitive("Needle in hAyStAcK", "haystack"));
 }
 
-pub fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    return if (needle.len > haystack.len) false else eqlIgnoreCase(haystack[haystack.len - needle.len ..], needle);
+pub fn endsWithInsensitive(haystack: []const u8, needle: []const u8) bool {
+    return if (needle.len > haystack.len) false else eqlInsensitive(haystack[haystack.len - needle.len ..], needle);
 }
 
-test "ascii.endsWithIgnoreCase" {
-    try std.testing.expect(endsWithIgnoreCase("Needle in HaYsTaCk", "haystack"));
-    try std.testing.expect(!endsWithIgnoreCase("BoB", "Bo"));
+test "ascii.endsWithInsensitive" {
+    try testing.expect(endsWithInsensitive("Needle in HaYsTaCk", "haystack"));
+    try testing.expect(!endsWithInsensitive("BoB", "Bo"));
 }
 
 /// Finds `substr` in `container`, ignoring case, starting at `start_index`.
 /// TODO boyer-moore algorithm
-pub fn indexOfIgnoreCasePos(container: []const u8, start_index: usize, substr: []const u8) ?usize {
+pub fn indexOfInsensitivePos(container: []const u8, start_index: usize, substr: []const u8) ?usize {
     if (substr.len > container.len) return null;
 
     var i: usize = start_index;
     const end = container.len - substr.len;
     while (i <= end) : (i += 1) {
-        if (eqlIgnoreCase(container[i .. i + substr.len], substr)) return i;
+        if (eqlInsensitive(container[i .. i + substr.len], substr)) return i;
     }
     return null;
 }
 
 /// Finds `substr` in `container`, ignoring case, starting at index 0.
-pub fn indexOfIgnoreCase(container: []const u8, substr: []const u8) ?usize {
-    return indexOfIgnoreCasePos(container, 0, substr);
+pub fn indexOfInsensitive(container: []const u8, substr: []const u8) ?usize {
+    return indexOfInsensitivePos(container, 0, substr);
 }
 
-test "indexOfIgnoreCase" {
-    try std.testing.expect(indexOfIgnoreCase("one Two Three Four", "foUr").? == 14);
-    try std.testing.expect(indexOfIgnoreCase("one two three FouR", "gOur") == null);
-    try std.testing.expect(indexOfIgnoreCase("foO", "Foo").? == 0);
-    try std.testing.expect(indexOfIgnoreCase("foo", "fool") == null);
-
-    try std.testing.expect(indexOfIgnoreCase("FOO foo", "fOo").? == 0);
+test "indexOfInsensitive" {
+    try testing.expect(indexOfInsensitive("one Two Three Four", "foUr").? == 14);
+    try testing.expect(indexOfInsensitive("one two three FouR", "gOur") == null);
+    try testing.expect(indexOfInsensitive("foO", "Foo").? == 0);
+    try testing.expect(indexOfInsensitive("foo", "fool") == null);
+    try testing.expect(indexOfInsensitive("FOO foo", "fOo").? == 0);
 }
 
 /// Compares two slices of numbers lexicographically. O(n).
-pub fn orderIgnoreCase(lhs: []const u8, rhs: []const u8) std.math.Order {
+pub fn orderInsensitive(lhs: []const u8, rhs: []const u8) std.math.Order {
     const n = std.math.min(lhs.len, rhs.len);
     var i: usize = 0;
     while (i < n) : (i += 1) {
@@ -415,8 +412,49 @@ pub fn orderIgnoreCase(lhs: []const u8, rhs: []const u8) std.math.Order {
     return std.math.order(lhs.len, rhs.len);
 }
 
-/// Returns true if lhs < rhs, false otherwise
-/// TODO rename "IgnoreCase" to "Insensitive" in this entire file.
-pub fn lessThanIgnoreCase(lhs: []const u8, rhs: []const u8) bool {
-    return orderIgnoreCase(lhs, rhs) == .lt;
+/// Returns whether lhs < rhs.
+pub fn lessThanInsensitive(lhs: []const u8, rhs: []const u8) bool {
+    return orderInsensitive(lhs, rhs) == .lt;
+}
+
+// TODO: remove everything below this line after 0.10.0
+
+/// DEPRECATED: use `isAlphanumeric`
+pub const isAlNum = isAlphanumeric;
+/// DEPRECATED: use `eqlInsensitive`
+pub const eqlIgnoreCase = eqlInsensitive;
+/// DEPRECATED: use `isPrintable`
+pub const isPrint = isPrintable;
+/// DEPRECATED: use `startsWithInsensitive`
+pub const startsWithIgnoreCase = startsWithInsensitive;
+/// DEPRECATED: use `lessThanInsensitive`
+pub const lessThanIgnoreCase = lessThanInsensitive;
+/// DEPRECATED: use `orderInsensitive`
+pub const orderIgnoreCase = orderInsensitive;
+/// DEPRECATED: use `indexOfInsensitive`
+pub const indexOfIgnoreCase = indexOfInsensitive;
+/// DEPRECATED: use `indexOfInsensitivePos`
+pub const indexOfIgnoreCasePos = indexOfInsensitivePos;
+/// DEPRECATED: use `endsWithInsensitive`
+pub const endsWithIgnoreCase = endsWithInsensitive;
+/// DEPRECATED: use `control`
+pub const control_code = control;
+/// DEPRECATED: use `char == ' ' or char == '\t'`
+fn isBlank(char: u8) bool {
+    return char == ' ' or char == '\t';
+}
+/// DEPRECATED: use `isHexadecimal`
+pub const isXDigit = isHexadecimal;
+/// DEPRECATED: use `isControl`
+pub const isCntrl = isControl;
+/// DEPRECATED: use `isAlphabetic`
+pub const isAlpha = isAlphabetic;
+/// DEPRECATED: use `isWhitespace`
+pub const isSpace = isWhitespace;
+/// DEPRECATED: use `whitespace`
+pub const spaces = whitespace;
+pub const isPunct = @compileError("removed: write your own function suited to your particular case");
+/// DEPRECATED: use `isPrintable(char) and char != ' '`
+fn isGraph(char: u8) bool {
+    return isPrintable(char) and char != ' ';
 }

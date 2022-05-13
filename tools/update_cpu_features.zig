@@ -1231,17 +1231,17 @@ fn usageAndExit(file: fs.File, arg0: []const u8, code: u8) noreturn {
 
 fn featureLessThan(context: void, a: Feature, b: Feature) bool {
     _ = context;
-    return std.ascii.lessThanIgnoreCase(a.zig_name, b.zig_name);
+    return std.ascii.lessThanInsensitive(a.zig_name, b.zig_name);
 }
 
 fn cpuLessThan(context: void, a: Cpu, b: Cpu) bool {
     _ = context;
-    return std.ascii.lessThanIgnoreCase(a.zig_name, b.zig_name);
+    return std.ascii.lessThanInsensitive(a.zig_name, b.zig_name);
 }
 
 fn asciiLessThan(context: void, a: []const u8, b: []const u8) bool {
     _ = context;
-    return std.ascii.lessThanIgnoreCase(a, b);
+    return std.ascii.lessThanInsensitive(a, b);
 }
 
 fn llvmNameToZigName(arena: mem.Allocator, llvm_name: []const u8) ![]const u8 {

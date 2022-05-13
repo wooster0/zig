@@ -1043,7 +1043,7 @@ fn printCharValues(out: anytype, bytes: []const u8) !void {
 }
 
 fn printUnderstandableChar(out: anytype, char: u8) !void {
-    if (!std.ascii.isPrint(char) or char == ' ') {
+    if (!std.ascii.isPrintable(char) or char == ' ') {
         try out.print("\\x{X:0>2}", .{char});
     } else {
         try out.print("'{c}'", .{printable_char_tab[char]});

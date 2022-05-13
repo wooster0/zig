@@ -242,16 +242,16 @@ pub fn parseNumber(comptime T: type, s: []const u8, negative: bool) ?Number(T) {
 
 fn parsePartialInfOrNan(comptime T: type, s: []const u8, negative: bool, n: *usize) ?T {
     // inf/infinity; infxxx should only consume inf.
-    if (std.ascii.startsWithIgnoreCase(s, "inf")) {
+    if (std.ascii.startsWithInsensitive(s, "inf")) {
         n.* = 3;
-        if (std.ascii.startsWithIgnoreCase(s[3..], "inity")) {
+        if (std.ascii.startsWithInsensitive(s[3..], "inity")) {
             n.* = 8;
         }
 
         return if (!negative) std.math.inf(T) else -std.math.inf(T);
     }
 
-    if (std.ascii.startsWithIgnoreCase(s, "nan")) {
+    if (std.ascii.startsWithInsensitive(s, "nan")) {
         n.* = 3;
         return std.math.nan(T);
     }
