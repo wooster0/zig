@@ -1,4 +1,5 @@
-//! This API non-allocating, non-fallible, and thread-safe.
+//! A non-allocating, non-fallible, and thread-safe API for printing
+//! progress indicators to the terminal.
 //! The tradeoff is that users of this API must provide the storage
 //! for each `Progress.Node`.
 //!
@@ -17,7 +18,7 @@ const Progress = @This();
 /// not print on update()
 terminal: ?std.fs.File = undefined,
 
-/// Is this a windows API terminal (note: this is not the same as being run on windows
+/// Is this a Windows API terminal (note: this is not the same as being run on Windows
 /// because other terminals exist like MSYS/git-bash)
 is_windows_terminal: bool = false,
 
@@ -48,7 +49,7 @@ output_buffer: [100]u8 = undefined,
 /// How many nanoseconds between writing updates to the terminal.
 refresh_rate_ns: u64 = 50 * std.time.ns_per_ms,
 
-/// How many nanoseconds to keep the output hidden
+/// How many nanoseconds to keep the output hidden.
 initial_delay_ns: u64 = 500 * std.time.ns_per_ms,
 
 done: bool = true,
