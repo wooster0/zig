@@ -256,34 +256,34 @@ fn refreshWithHeldLock(self: *Progress) void {
     }
 
     if (!self.done) {
-        var need_ellipse = false;
+        var need_ellipsis = false;
         var maybe_node: ?*Node = &self.root;
         while (maybe_node) |node| {
-            if (need_ellipse) {
+            if (need_ellipsis) {
                 self.bufWrite(&end, "... ", .{});
             }
-            need_ellipse = false;
+            need_ellipsis = false;
             const eti = @atomicLoad(usize, &node.unprotected_estimated_total_items, .Monotonic);
             const completed_items = @atomicLoad(usize, &node.unprotected_completed_items, .Monotonic);
             const current_item = completed_items + 1;
             if (node.name.len != 0 or eti > 0) {
                 if (node.name.len != 0) {
                     self.bufWrite(&end, "{s}", .{node.name});
-                    need_ellipse = true;
+                    need_ellipsis = true;
                 }
                 if (eti > 0) {
-                    if (need_ellipse) self.bufWrite(&end, " ", .{});
+                    if (need_ellipsis) self.bufWrite(&end, " ", .{});
                     self.bufWrite(&end, "[{d}/{d}] ", .{ current_item, eti });
-                    need_ellipse = false;
+                    need_ellipsis = false;
                 } else if (completed_items != 0) {
-                    if (need_ellipse) self.bufWrite(&end, " ", .{});
+                    if (need_ellipsis) self.bufWrite(&end, " ", .{});
                     self.bufWrite(&end, "[{d}] ", .{current_item});
-                    need_ellipse = false;
+                    need_ellipsis = false;
                 }
             }
             maybe_node = @atomicLoad(?*Node, &node.recently_updated_child, .Acquire);
         }
-        if (need_ellipse) {
+        if (need_ellipsis) {
             self.bufWrite(&end, "... ", .{});
         }
     }
