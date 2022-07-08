@@ -1,9 +1,11 @@
-//! A non-allocating, non-fallible, and thread-safe API for printing
+//! This is a non-allocating, non-fallible, and thread-safe API for printing
 //! progress indicators to the terminal.
 //! The tradeoff is that users of this API must provide the storage
 //! for each `Progress.Node`.
 //!
-//! Initialize the struct directly, overriding these fields as desired:
+//! This library purposefully keeps its output simple and is ASCII-compatible.
+//!
+//! Initialize the struct directly, overriding fields as desired.
 //! * `refresh_rate_ms`
 //! * `initial_delay_ms`
 
@@ -68,6 +70,10 @@ columns_written: usize = undefined,
 pub const Node = struct {
     context: *Progress,
     parent: ?*Node,
+    /// The name that will be displayed for this node.
+    ///
+    /// Try to keep this short to make sure the progress line does not exceed
+    /// the terminal in width, otherwise it could cause the output to be corrupted.
     name: []const u8,
     /// Must be handled atomically to be thread-safe.
     recently_updated_child: ?*Node = null,
