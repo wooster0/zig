@@ -263,17 +263,17 @@ fn refreshWithHeldLock(self: *Progress) void {
                 self.bufWrite(&end, "... ", .{});
             }
             need_ellipsis = false;
-            const eti = @atomicLoad(usize, &node.unprotected_estimated_total_items, .Monotonic);
+            const estimated_total_items = @atomicLoad(usize, &node.unprotected_estimated_total_items, .Monotonic);
             const completed_items = @atomicLoad(usize, &node.unprotected_completed_items, .Monotonic);
             const current_item = completed_items + 1;
-            if (node.name.len != 0 or eti > 0) {
+            if (node.name.len != 0 or estimated_total_items > 0) {
                 if (node.name.len != 0) {
                     self.bufWrite(&end, "{s}", .{node.name});
                     need_ellipsis = true;
                 }
-                if (eti > 0) {
+                if (estimated_total_items > 0) {
                     if (need_ellipsis) self.bufWrite(&end, " ", .{});
-                    self.bufWrite(&end, "[{d}/{d}] ", .{ current_item, eti });
+                    self.bufWrite(&end, "[{d}/{d}] ", .{ current_item, estimated_total_items });
                     need_ellipsis = false;
                 } else if (completed_items != 0) {
                     if (need_ellipsis) self.bufWrite(&end, " ", .{});
