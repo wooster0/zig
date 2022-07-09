@@ -5,13 +5,16 @@
 //!
 //! This library purposefully keeps its output simple and is ASCII-compatible.
 //!
-//! Initialize the struct directly, overriding fields as desired.
+//! Initialize the struct directly, overriding these fields as desired:
 //! * `refresh_rate_ms`
 //! * `initial_delay_ms`
+//! * `max_width`
+//! * `dont_print_on_dumb`
 
 const std = @import("std");
 const builtin = @import("builtin");
-const windows = std.os.windows;
+const os = std.os;
+const windows = os.windows;
 const testing = std.testing;
 const assert = std.debug.assert;
 const io = std.io;
@@ -47,9 +50,15 @@ prev_refresh_timestamp: u64 = undefined,
 
 /// Used to buffer the bytes written to the terminal with each refresh.
 buffered_writer: io.BufferedWriter(
-    256,
-    io.Writer(std.fs.File, std.os.WriteError, std.fs.File.write),
+    256, // should suffice for most terminals
+    io.Writer(std.fs.File, os.WriteError, std.fs.File.write),
 ) = undefined,
+
+/// This is the maximum number of bytes written to the terminal with each refresh.
+///
+/// It is recommended to leave this as `null` so that `start` can automatically use an
+/// optimal width for the terminal.
+max_width: ?usize = null,
 
 /// How many nanoseconds between writing updates to the terminal.
 refresh_rate_ns: u64 = 50 * std.time.ns_per_ms,
@@ -74,9 +83,6 @@ pub const Node = struct {
     context: *Progress,
     parent: ?*Node,
     /// The name that will be displayed for this node.
-    ///
-    /// Try to keep this short to make sure the progress line does not exceed
-    /// the terminal in width, otherwise it could cause the output to be corrupted.
     name: []const u8,
     /// Must be handled atomically to be thread-safe.
     recently_updated_child: ?*Node = null,
@@ -166,6 +172,22 @@ pub fn start(self: *Progress, name: []const u8, estimated_total_items: usize) *N
         self.terminal = stderr;
     }
     self.buffered_writer = .{ .unbuffered_writer = undefined };
+    if (self.max_width) |*max_width| {
+        max_width.* = std.math.clamp(max_width.*, 0, self.buffered_writer.buf.len);
+    } else {
+        if (self.terminal) |terminal| {
+            self.max_width = getTerminalWidth(terminal.handle) catch 100;
+        } else {
+            self.max_width = 100;
+        }
+        // TODO: currently if you run the tests with a terminal width of 100,
+        //       you'll see messed up results which is because we're not taking into account
+        //       an external `std.Progress` instance with different state.
+        //
+        //       to solve this, get the current terminal cursor X position (column) and subtract it from
+        //       `self.max_width` here. On Linux this will involve making the terminal non-blocking,
+        //       on Windows it should be easier and you can reuse code from `refreshWithHeldLock`.
+    }
     self.root = Node{
         .context = self,
         .parent = null,
@@ -178,6 +200,21 @@ pub fn start(self: *Progress, name: []const u8, estimated_total_items: usize) *N
     self.timer = std.time.Timer.start() catch null;
     self.done = false;
     return &self.root;
+}
+
+fn getTerminalWidth(file_handle: os.fd_t) !usize {
+    if (builtin.os.tag == .windows) {
+        var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        if (windows.kernel32.GetConsoleScreenBufferInfo(file_handle, &info) != windows.TRUE)
+            unreachable;
+        return info.dwSize.X;
+    } else {
+        var winsize: os.linux.winsize = undefined;
+        switch (os.errno(os.linux.ioctl(file_handle, os.linux.T.IOCGWINSZ, @ptrToInt(&winsize)))) {
+            .SUCCESS => return winsize.ws_col,
+            else => return error.Unexpected,
+        }
+    }
 }
 
 /// Updates the terminal if enough time has passed since last update. Thread-safe.
@@ -297,7 +334,7 @@ fn refreshWithHeldLock(self: *Progress) void {
             }
             maybe_node = @atomicLoad(?*Node, &node.recently_updated_child, .Acquire);
         }
-        const truncated = counting_writer.context.bytes_written >= 100;
+        const truncated = counting_writer.context.bytes_written >= self.max_width.?;
         if (!truncated) {
             if (need_ellipsis)
                 _ = self.print(counting_writer, "... ", .{});
@@ -318,7 +355,7 @@ fn refreshWithHeldLock(self: *Progress) void {
 fn print(self: *Progress, counting_writer: anytype, comptime format: []const u8, args: anytype) bool {
     const buf_writer = counting_writer.context.child_stream.context;
     counting_writer.print(format, args) catch unreachable;
-    if (counting_writer.context.bytes_written >= 100) {
+    if (counting_writer.context.bytes_written >= self.max_width.?) {
         self.truncateWithSuffix(buf_writer, counting_writer.context.bytes_written);
         return true;
     }
@@ -327,10 +364,10 @@ fn print(self: *Progress, counting_writer: anytype, comptime format: []const u8,
 
 fn truncateWithSuffix(self: *Progress, buf_writer: anytype, printables: usize) void {
     const unprintables = buf_writer.end -| printables;
-    const truncated = buf_writer.buf[unprintables .. 100 + unprintables];
+    const truncated = buf_writer.buf[unprintables .. self.max_width.? + unprintables];
     const suffix = "... ";
     std.mem.copy(u8, truncated[truncated.len - suffix.len ..], suffix);
-    buf_writer.end = 100 + unprintables;
+    buf_writer.end = self.max_width.? + unprintables;
     self.columns_written = buf_writer.end - unprintables;
 }
 
