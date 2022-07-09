@@ -408,7 +408,7 @@ pub fn log(self: *Progress, comptime format: []const u8, args: anytype) void {
 // TODO: somehow it moves back by one character sometimes
 
 // By default these tests are disabled because they use time.sleep()
-// and are therefore slow. They also prints bogus progress data to stderr.
+// and are therefore slow. They also print bogus progress data to stderr.
 const skip_tests = true;
 
 test "adjusting to terminal width automatically" {
