@@ -384,14 +384,66 @@ pub fn log(self: *Progress, comptime format: []const u8, args: anytype) void {
     self.columns_written = 0;
 }
 
-test "basic functionality" {
-    var disable = true;
-    if (disable) {
-        // This test is disabled because it uses time.sleep() and is therefore slow. It also
-        // prints bogus progress data to stderr.
+// By default these tests are disabled because they use time.sleep()
+// and are therefore slow. They also prints bogus progress data to stderr.
+const skip_tests = true;
+
+test "behavior on buffer overflow" {
+    if (skip_tests)
         return error.SkipZigTest;
+
+    var progress = Progress{ .max_width = 100 };
+
+    const long_string = "A" ** 300;
+    var node = progress.start(long_string, 0);
+
+    const speed_factor = std.time.ns_per_s / 4;
+
+    std.time.sleep(speed_factor);
+    node.activate();
+    std.time.sleep(speed_factor);
+    node.end();
+}
+
+test "multiple tasks with long names" {
+    if (skip_tests)
+        return error.SkipZigTest;
+
+    const time = std.time;
+
+    var progress = Progress{ .max_width = 100 };
+
+    const tasks = [_][]const u8{
+        "A" ** 99,
+        "A" ** 100,
+        "A" ** 101,
+        "A" ** 102,
+        "A" ** 103,
+    };
+
+    const speed_factor = time.ns_per_s / 6;
+
+    for (tasks) |task| {
+        var node = progress.start(task, 3);
+        time.sleep(speed_factor);
+        node.activate();
+
+        time.sleep(speed_factor);
+        node.completeOne();
+        time.sleep(speed_factor);
+        node.completeOne();
+        time.sleep(speed_factor);
+        node.completeOne();
+
+        node.end();
     }
-    var progress = Progress{};
+}
+
+test "basic functionality" {
+    if (skip_tests)
+        return error.SkipZigTest;
+
+    var progress = Progress{ .max_width = 100 };
     const root_node = progress.start("", 100);
     defer root_node.end();
 
