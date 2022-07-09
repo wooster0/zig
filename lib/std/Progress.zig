@@ -172,22 +172,15 @@ pub fn start(self: *Progress, name: []const u8, estimated_total_items: usize) *N
         self.terminal = stderr;
     }
     self.buffered_writer = .{ .unbuffered_writer = undefined };
-    if (self.max_width) |*max_width| {
-        max_width.* = std.math.clamp(max_width.*, 0, self.buffered_writer.buf.len);
-    } else {
+    if (self.max_width == null) {
         if (self.terminal) |terminal| {
-            self.max_width = getTerminalWidth(terminal.handle) catch 100;
+            self.max_width = self.getTerminalWidth(terminal.handle) catch 100;
+            self.max_width.? -= self.getTerminalCursorColumn(terminal) catch 0;
         } else {
             self.max_width = 100;
         }
-        // TODO: currently if you run the tests with a terminal width of 100,
-        //       you'll see messed up results which is because we're not taking into account
-        //       an external `std.Progress` instance with different state.
-        //
-        //       to solve this, get the current terminal cursor X position (column) and subtract it from
-        //       `self.max_width` here. On Linux this will involve making the terminal non-blocking,
-        //       on Windows it should be easier and you can reuse code from `refreshWithHeldLock`.
     }
+    self.max_width = std.math.clamp(self.max_width.?, 4, self.buffered_writer.buf.len);
     self.root = Node{
         .context = self,
         .parent = null,
@@ -202,8 +195,9 @@ pub fn start(self: *Progress, name: []const u8, estimated_total_items: usize) *N
     return &self.root;
 }
 
-fn getTerminalWidth(file_handle: os.fd_t) !usize {
+fn getTerminalWidth(self: Progress, file_handle: os.fd_t) !u16 {
     if (builtin.os.tag == .windows) {
+        std.debug.assert(self.is_windows_terminal);
         var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
         if (windows.kernel32.GetConsoleScreenBufferInfo(file_handle, &info) != windows.TRUE)
             unreachable;
@@ -217,6 +211,35 @@ fn getTerminalWidth(file_handle: os.fd_t) !usize {
     }
 }
 
+fn getTerminalCursorColumn(self: Progress, file: std.fs.File) !u16 {
+    if (self.supports_ansi_escape_codes) {
+        var original_termios = try os.tcgetattr(file.handle);
+        var new_termios = original_termios;
+        // Disable echo and enable non-canonical mode (no enter press required)
+        new_termios.lflag &= ~(os.linux.ECHO | os.linux.ICANON);
+        try os.tcsetattr(file.handle, .NOW, new_termios);
+        defer os.tcsetattr(file.handle, .NOW, original_termios) catch {
+            // Sorry for ruining your terminal
+        };
+
+        try file.writeAll("\x1b[6n");
+        var buf: ["\x1b[256;256R".len]u8 = undefined;
+        const output = try file.reader().readUntilDelimiter(&buf, 'R');
+        var splitter = std.mem.split(u8, output, ";");
+        _ = splitter.next().?; // skip first half
+        const column_half = splitter.next() orelse return error.UnexpectedEnd;
+        const column = try std.fmt.parseUnsigned(u16, column_half, 10);
+        return column - 1; // it's one-based
+    } else if (builtin.os.tag == .windows) {
+        std.debug.assert(self.is_windows_terminal);
+        var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        if (windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &info) != windows.TRUE)
+            unreachable;
+        return info.dwCursorPosition.X;
+    } else {
+        return error.Unsupported;
+    }
+}
 /// Updates the terminal if enough time has passed since last update. Thread-safe.
 pub fn maybeRefresh(self: *Progress) void {
     if (self.timer) |*timer| {
@@ -306,12 +329,12 @@ fn refreshWithHeldLock(self: *Progress) void {
         self.columns_written = 0;
     }
 
-    if (!self.done) {
+    if (!self.done) print: {
         var need_ellipsis = false;
         var maybe_node: ?*Node = &self.root;
         while (maybe_node) |node| {
             if (need_ellipsis) {
-                if (self.print(counting_writer, "... ", .{})) break;
+                if (self.print(counting_writer, "... ", .{})) break :print;
             }
             need_ellipsis = false;
             const estimated_total_items = @atomicLoad(usize, &node.unprotected_estimated_total_items, .Monotonic);
@@ -319,27 +342,25 @@ fn refreshWithHeldLock(self: *Progress) void {
             const current_item = completed_items + 1;
             if (node.name.len != 0 or estimated_total_items > 0) {
                 if (node.name.len != 0) {
-                    if (self.print(counting_writer, "{s}", .{node.name})) break;
+                    if (self.print(counting_writer, "{s}", .{node.name})) break :print;
                     need_ellipsis = true;
                 }
                 if (estimated_total_items > 0) {
-                    if (need_ellipsis) if (self.print(counting_writer, " ", .{})) break;
-                    if (self.print(counting_writer, "[{d}/{d}] ", .{ current_item, estimated_total_items })) break;
+                    if (need_ellipsis and self.print(counting_writer, " ", .{})) break :print;
+                    if (self.print(counting_writer, "[{d}/{d}] ", .{ current_item, estimated_total_items })) break :print;
                     need_ellipsis = false;
                 } else if (completed_items != 0) {
-                    if (need_ellipsis) if (self.print(counting_writer, " ", .{})) break;
-                    if (self.print(counting_writer, "[{d}] ", .{current_item})) break;
+                    if (need_ellipsis and self.print(counting_writer, " ", .{})) break :print;
+                    if (self.print(counting_writer, "[{d}] ", .{current_item})) break :print;
                     need_ellipsis = false;
                 }
             }
             maybe_node = @atomicLoad(?*Node, &node.recently_updated_child, .Acquire);
         }
-        const truncated = counting_writer.context.bytes_written >= self.max_width.?;
-        if (!truncated) {
-            if (need_ellipsis)
-                _ = self.print(counting_writer, "... ", .{});
-            self.columns_written = counting_writer.context.bytes_written;
+        if (need_ellipsis) {
+            _ = self.print(counting_writer, "... ", .{});
         }
+        self.columns_written = counting_writer.context.bytes_written;
     }
 
     self.buffered_writer.flush() catch {
@@ -355,7 +376,7 @@ fn refreshWithHeldLock(self: *Progress) void {
 fn print(self: *Progress, counting_writer: anytype, comptime format: []const u8, args: anytype) bool {
     const buf_writer = counting_writer.context.child_stream.context;
     counting_writer.print(format, args) catch unreachable;
-    if (counting_writer.context.bytes_written >= self.max_width.?) {
+    if (counting_writer.context.bytes_written > self.max_width.?) {
         self.truncateWithSuffix(buf_writer, counting_writer.context.bytes_written);
         return true;
     }
@@ -384,9 +405,45 @@ pub fn log(self: *Progress, comptime format: []const u8, args: anytype) void {
     self.columns_written = 0;
 }
 
+// TODO: somehow it moves back by one character sometimes
+
 // By default these tests are disabled because they use time.sleep()
 // and are therefore slow. They also prints bogus progress data to stderr.
 const skip_tests = true;
+
+test "adjusting to terminal width automatically" {
+    if (skip_tests)
+        return error.SkipZigTest;
+
+    const time = std.time;
+
+    var progress = Progress{ .max_width = null };
+
+    const tasks = [_][]const u8{
+        "2" ** 20,
+        "4" ** 40,
+        "6" ** 60,
+        "8" ** 80,
+        "1" ** 100,
+    };
+
+    const speed_factor = time.ns_per_s / 2;
+
+    for (tasks) |task| {
+        var node = progress.start(task, 3);
+        time.sleep(speed_factor);
+        node.activate();
+
+        time.sleep(speed_factor);
+        node.completeOne();
+        time.sleep(speed_factor);
+        node.completeOne();
+        time.sleep(speed_factor);
+        node.completeOne();
+
+        node.end();
+    }
+}
 
 test "behavior on buffer overflow" {
     if (skip_tests)
