@@ -5481,6 +5481,20 @@ test "matching whitespace on minus op" {
     , &[_]Error{});
 }
 
+test "recovery: mismatched keyword whitespace" {
+    try testError(
+        \\_ = x()catch {},
+        \\_ = x() catch{},
+        \\_ = x()orelse {},
+        \\_ = x() orelse{},
+    , &[_]Error{
+        .mismatched_keyword_whitespace,
+        .mismatched_keyword_whitespace,
+        .mismatched_keyword_whitespace,
+        .mismatched_keyword_whitespace,
+    });
+}
+
 test "ampersand" {
     try testError(
         \\ _ = bar && foo,

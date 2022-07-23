@@ -1493,7 +1493,10 @@ const Parser = struct {
                     // The best the parser can do is recommend changing it to 'and' or ' & &'
                     try p.warnMsg(.{ .tag = .invalid_ampersand_ampersand, .token = oper_token });
                 } else if (std.ascii.isSpace(char_before) != std.ascii.isSpace(char_after)) {
-                    try p.warnMsg(.{ .tag = .mismatched_binary_op_whitespace, .token = oper_token });
+                    if (tok_tag == .keyword_catch or tok_tag == .keyword_orelse)
+                        try p.warnMsg(.{ .tag = .mismatched_keyword_whitespace, .token = oper_token })
+                    else
+                        try p.warnMsg(.{ .tag = .mismatched_binary_op_whitespace, .token = oper_token });
                 }
             }
 
