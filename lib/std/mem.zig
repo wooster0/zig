@@ -1963,6 +1963,11 @@ pub fn SplitIterator(comptime T: type) type {
             const start = self.index orelse end;
             return self.buffer[start..end];
         }
+        
+        /// Resets the iterator to the initial slice.
+        pub fn reset(self: Self) []const T {
+            self.index = 0;
+        }
     };
 }
 
@@ -1991,6 +1996,11 @@ pub fn SplitBackwardsIterator(comptime T: type) type {
         pub fn rest(self: Self) []const T {
             const end = self.index orelse 0;
             return self.buffer[0..end];
+        }
+        
+        /// Resets the iterator to the initial slice.
+        pub fn reset(self: Self) []const T {
+            self.index = buffer.len;
         }
     };
 }
