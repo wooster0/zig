@@ -1279,6 +1279,24 @@ test "lossyCast" {
     try testing.expect(lossyCast(u32, @as(f32, maxInt(u32))) == maxInt(u32));
 }
 
+/// Performs linear interpolation between *a* and *b* based on *t*.
+/// *t* must be in range 0 to 1.
+pub fn lerp(comptime T: type, a: T, b: T, t: T) T {
+    assert(t >= 0 and t <= 1);
+    return a + (b - a) * t;
+}
+
+test "lerp" {
+    try testing.expectEqual(@as(f128, 25), lerp(f128, 0, 50, 0.5));
+    try testing.expectEqual(@as(f16, 75), lerp(f16, 50, 100, 0.5));
+    try testing.expectEqual(@as(f32, 43.75), lerp(f32, 50, 25, 0.25));
+    try testing.expectEqual(@as(f16, -31.25), lerp(f16, -50, 25, 0.25));
+    try testing.expectEqual(@as(f64, 4), lerp(f64, 1, 5, 0.75));
+    try testing.expectEqual(@as(f64, 500), lerp(f64, 500, 5000, 0));
+    try testing.expectEqual(@as(f64, 5000), lerp(f64, 500, 5000, 1));
+    try testing.expectEqual(@as(f16, -550), lerp(f16, -100, -1000, 0.5));
+}
+
 /// Returns the maximum value of integer type T.
 pub fn maxInt(comptime T: type) comptime_int {
     const info = @typeInfo(T);
