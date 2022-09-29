@@ -1281,20 +1281,46 @@ test "lossyCast" {
 
 /// Performs linear interpolation between *a* and *b* based on *t*.
 /// *t* must be in range 0 to 1.
-pub fn lerp(comptime T: type, a: T, b: T, t: T) T {
+///
+/// This is less precise than `preciseLerp` but faster.
+/// The imprecision becomes clear if *a* and *b* significantly differ in magnitude.
+/// This does not guarantee returning *b* if *t* is 1, due to floating-point arithmetic error.
+pub fn impreciseLerp(comptime T: type, a: T, b: T, t: T) T {
     assert(t >= 0 and t <= 1);
     return a + (b - a) * t;
 }
 
+/// Performs linear interpolation between *a* and *b* based on *t*.
+/// *t* must be in range 0 to 1.
+///
+/// This is slightly slower than `impreciseLerp` but more precise.
+/// This guarantees returning *b* if *t* is 1. This is monotonic if `a * b < 0`.
+pub fn preciseLerp(comptime T: type, a: T, b: T, t: T) T {
+    assert(t >= 0 and t <= 1);
+    return (1 - t) * a + t * b;
+}
+
 test "lerp" {
-    try testing.expectEqual(@as(f128, 25), lerp(f128, 0, 50, 0.5));
-    try testing.expectEqual(@as(f16, 75), lerp(f16, 50, 100, 0.5));
-    try testing.expectEqual(@as(f32, 43.75), lerp(f32, 50, 25, 0.25));
-    try testing.expectEqual(@as(f16, -31.25), lerp(f16, -50, 25, 0.25));
-    try testing.expectEqual(@as(f64, 4), lerp(f64, 1, 5, 0.75));
-    try testing.expectEqual(@as(f64, 500), lerp(f64, 500, 5000, 0));
-    try testing.expectEqual(@as(f64, 5000), lerp(f64, 500, 5000, 1));
-    try testing.expectEqual(@as(f16, -550), lerp(f16, -100, -1000, 0.5));
+    try testing.expectEqual(@as(f16, 11.9921875), impreciseLerp(f16, 0, 50, 0.239828932329));
+    try testing.expectEqual(@as(f16, 11.9921875), preciseLerp(f16, 0, 50, 0.239828932329));
+    try testing.expectEqual(@as(f32, 1000.21342288932), impreciseLerp(f32, 100.1239828932329, 1000.21342288932, 1));
+    try testing.expectEqual(@as(f32, 1000.21342288932), preciseLerp(f32, 100.1239828932329, 1000.21342288932, 1));
+
+    // this highlights the precision
+    try testing.expectEqual(@as(f32, 0.0), impreciseLerp(f32, 1.0e8, 1.0, 1.0));
+    try testing.expectEqual(@as(f32, 1.0), preciseLerp(f32, 1.0e8, 1.0, 1.0));
+    try testing.expectEqual(@as(f16, 0.0), impreciseLerp(f16, 1.0e4, 1.0, 1.0));
+    try testing.expectEqual(@as(f16, 1.0), preciseLerp(f16, 1.0e4, 1.0, 1.0));
+
+    try testing.expectEqual(@as(f128, 25), impreciseLerp(f128, 0, 50, 0.5));
+    try testing.expectEqual(@as(f16, 75), preciseLerp(f16, 50, 100, 0.5));
+    try testing.expectEqual(@as(f32, 43.75), impreciseLerp(f32, 50, 25, 0.25));
+    try testing.expectEqual(@as(f16, -31.25), preciseLerp(f16, -50, 25, 0.25));
+    try testing.expectEqual(@as(f64, 4), impreciseLerp(f64, 1, 5, 0.75));
+    try testing.expectEqual(@as(f64, 500), preciseLerp(f64, 500, 5000, 0));
+    try testing.expectEqual(@as(f64, 5000), impreciseLerp(f64, 500, 5000, 1));
+    try testing.expectEqual(@as(f16, -550), preciseLerp(f16, -100, -1000, 0.5));
+    try testing.expectEqual(@as(f16, -550), impreciseLerp(f16, -100, -1000, 0.5));
 }
 
 /// Returns the maximum value of integer type T.
