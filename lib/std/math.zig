@@ -1284,7 +1284,8 @@ test "lossyCast" {
 ///
 /// This is less precise than `preciseLerp` but faster.
 /// The imprecision becomes clear if *a* and *b* significantly differ in magnitude.
-/// This does not guarantee returning *b* if *t* is 1, due to floating-point arithmetic error.
+/// This does not guarantee returning *b* if *t* is 1.
+/// This is monotonic.
 pub fn impreciseLerp(comptime T: type, a: T, b: T, t: T) T {
     assert(t >= 0 and t <= 1);
     return a + (b - a) * t;
@@ -1294,7 +1295,8 @@ pub fn impreciseLerp(comptime T: type, a: T, b: T, t: T) T {
 /// *t* must be in range 0 to 1.
 ///
 /// This is slightly slower than `impreciseLerp` but more precise.
-/// This guarantees returning *b* if *t* is 1. This is monotonic if `a * b < 0`.
+/// This guarantees returning *b* if *t* is 1.
+/// This is monotonic if `a * b` is negative.
 pub fn preciseLerp(comptime T: type, a: T, b: T, t: T) T {
     assert(t >= 0 and t <= 1);
     return (1 - t) * a + t * b;
