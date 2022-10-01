@@ -1279,49 +1279,31 @@ test "lossyCast" {
     try testing.expect(lossyCast(u32, @as(f32, maxInt(u32))) == maxInt(u32));
 }
 
-/// This allows you to configure how `lerp` behaves.
-/// This affects both results and speed.
-const LerpStrategy = enum {
-    /// This is slightly less precise than `precise` but faster:
-    /// it does not guarantee returning *b* if *t* is 1 due to floating-point errors.
-    /// This is monotonic.
-    fast,
-    /// This is more precise than `fast` but slightly slower:
-    /// it guarantees returning *b* if *t* is 1.
-    /// This is monotonic if `a * b` is negative.
-    precise,
-};
-
 /// Performs linear interpolation between *a* and *b* based on *t*.
 /// *t* must be between 0.0 and 1.0. T must be a float type.
 ///
-/// For the strategy `.fast` is recommended for most usages.
-/// See `LerpStrategy` for more information.
-fn lerp(comptime T: type, strategy: LerpStrategy, a: T, b: T, t: T) T {
+/// This does not guarantee returning *b* if *t* is 1 due to floating-point errors.
+/// This is monotonic.
+fn lerp(comptime T: type, a: T, b: T, t: T) T {
     if (@typeInfo(T) != .Float and @typeInfo(T) != .ComptimeFloat)
         @compileError("T must be a float type");
 
     assert(t >= 0 and t <= 1);
-    switch (strategy) {
-        .fast => return @mulAdd(T, t, (b - a), a), // fastest
-        .precise => return @mulAdd(T, a, (1 - t), t * b), // most precise
-    }
+    return @mulAdd(T, t, (b - a), a);
 }
 
 test "lerp" {
-    try testing.expectEqual(@as(f16, 75), lerp(f16, .fast, 50, 100, 0.5));
-    try testing.expectEqual(@as(f32, 43.75), lerp(f32, .fast, 50, 25, 0.25));
-    try testing.expectEqual(@as(f64, -31.25), lerp(f64, .fast, -50, 25, 0.25));
-    try testing.expectEqual(@as(f128, 25), lerp(f128, .fast, 0, 50, 0.5));
-    try testing.expectEqual(@as(f32, 0.0), lerp(f32, .fast, 1.0e8, 1.0, 1.0));
-    try testing.expectApproxEqRel(@as(f128, 7.010987590521e+62), lerp(f128, .fast, 0.123456789e-64, 0.123456789e64, 0.56789), 1e-33);
+    try testing.expectEqual(@as(f16, 75), lerp(f16, 50, 100, 0.5));
+    try testing.expectEqual(@as(f32, 43.75), lerp(f32, 50, 25, 0.25));
+    try testing.expectEqual(@as(f64, -31.25), lerp(f64, -50, 25, 0.25));
+    try testing.expectApproxEqRel(@as(f80, -7.16067345e+03), lerp(f80, -10000.12345, -5000.12345, 0.56789), 1e-19);
+    try testing.expectApproxEqRel(@as(f128, 7.010987590521e+62), lerp(f128, 0.123456789e-64, 0.123456789e64, 0.56789), 1e-33);
 
-    try testing.expectEqual(@as(f16, 75), lerp(f16, .precise, 50, 100, 0.5));
-    try testing.expectEqual(@as(f32, 43.75), lerp(f32, .precise, 50, 25, 0.25));
-    try testing.expectEqual(@as(f64, -31.25), lerp(f64, .precise, -50, 25, 0.25));
-    try testing.expectEqual(@as(f128, 25), lerp(f128, .precise, 0, 50, 0.5));
-    try testing.expectEqual(@as(f32, 1.0), lerp(f32, .precise, 1.0e8, 1.0, 1.0));
-    try testing.expectApproxEqRel(@as(f128, 7.010987590521e+62), lerp(f128, .precise, 0.123456789e-64, 0.123456789e64, 0.56789), 1e-33);
+    // this highlights the precision
+    try testing.expectEqual(@as(f32, 0.0), lerp(f32, 1.0e8, 1.0, 1.0));
+    try testing.expectEqual(@as(f16, 0.0), lerp(f16, 1.0e4, 1.0, 1.0));
+    try testing.expectEqual(@as(f32, 1.0), lerp(f32, 1.0e7, 1.0, 1.0));
+    try testing.expectEqual(@as(f16, 1.0), lerp(f16, 1.0e3, 1.0, 1.0));
 }
 
 /// Returns the maximum value of integer type T.
