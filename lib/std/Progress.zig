@@ -258,10 +258,10 @@ fn getTerminalCursorColumn(self: Progress, file: std.fs.File) !u16 {
 /// Updates the terminal if enough time has passed since last update. Thread-safe.
 pub fn maybeRefresh(self: *Progress) void {
     if (self.timer) |*timer| {
-        const now = timer.read();
-        if (now < self.initial_delay_ns) return;
         if (!self.update_mutex.tryLock()) return;
         defer self.update_mutex.unlock();
+        const now = timer.read();
+        if (now < self.initial_delay_ns) return;
         // TODO I have observed this to happen sometimes. I think we need to follow Rust's
         // lead and guarantee monotonically increasing times in the std lib itself.
         if (now < self.prev_refresh_timestamp) return;

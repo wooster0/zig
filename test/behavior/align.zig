@@ -400,7 +400,7 @@ test "function callconv expression depends on generic parameter" {
     comptime try S.doTheTest();
 }
 
-test "runtime known array index has best alignment possible" {
+test "runtime-known array index has best alignment possible" {
     if (builtin.zig_backend == .stage2_c) return error.SkipZigTest; // TODO
 
     // take full advantage of over-alignment
@@ -555,4 +555,17 @@ test "comptime alloc alignment" {
     comptime var bytes2 align(256) = [_]u8{0};
     var bytes2_addr = @ptrToInt(&bytes2);
     try expect(bytes2_addr & 0xff == 0);
+}
+
+test "@alignCast null" {
+    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
+
+    var ptr: ?*anyopaque = null;
+    const aligned: ?*anyopaque = @alignCast(@alignOf(?*anyopaque), ptr);
+    try expect(aligned == null);
+}
+
+test "alignment of slice element" {
+    const a: []align(1024) const u8 = undefined;
+    try expect(@TypeOf(&a[0]) == *align(1024) const u8);
 }

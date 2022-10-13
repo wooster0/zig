@@ -80,11 +80,11 @@ pub extern "c" fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: u
 pub const posix_spawnattr_t = *opaque {};
 pub const posix_spawn_file_actions_t = *opaque {};
 pub extern "c" fn posix_spawnattr_init(attr: *posix_spawnattr_t) c_int;
-pub extern "c" fn posix_spawnattr_destroy(attr: *posix_spawnattr_t) void;
+pub extern "c" fn posix_spawnattr_destroy(attr: *posix_spawnattr_t) c_int;
 pub extern "c" fn posix_spawnattr_setflags(attr: *posix_spawnattr_t, flags: c_short) c_int;
 pub extern "c" fn posix_spawnattr_getflags(attr: *const posix_spawnattr_t, flags: *c_short) c_int;
 pub extern "c" fn posix_spawn_file_actions_init(actions: *posix_spawn_file_actions_t) c_int;
-pub extern "c" fn posix_spawn_file_actions_destroy(actions: *posix_spawn_file_actions_t) void;
+pub extern "c" fn posix_spawn_file_actions_destroy(actions: *posix_spawn_file_actions_t) c_int;
 pub extern "c" fn posix_spawn_file_actions_addclose(actions: *posix_spawn_file_actions_t, filedes: fd_t) c_int;
 pub extern "c" fn posix_spawn_file_actions_addopen(
     actions: *posix_spawn_file_actions_t,
@@ -703,11 +703,18 @@ pub extern "c" fn os_unfair_lock_assert_not_owner(o: os_unfair_lock_t) void;
 
 // See: https://opensource.apple.com/source/xnu/xnu-6153.141.1/bsd/sys/_types.h.auto.html
 // TODO: audit mode_t/pid_t, should likely be u16/i32
+pub const blkcnt_t = i64;
+pub const blksize_t = i32;
+pub const dev_t = i32;
 pub const fd_t = c_int;
 pub const pid_t = c_int;
 pub const mode_t = c_uint;
 pub const uid_t = u32;
 pub const gid_t = u32;
+
+// machine/_types.h
+pub const clock_t = c_ulong;
+pub const time_t = c_long;
 
 pub const in_port_t = u16;
 pub const sa_family_t = u8;
@@ -911,14 +918,8 @@ pub const siginfo_t = extern struct {
 
 /// Renamed from `sigaction` to `Sigaction` to avoid conflict with function name.
 pub const Sigaction = extern struct {
-    pub const handler_fn = switch (builtin.zig_backend) {
-        .stage1 => fn (c_int) callconv(.C) void,
-        else => *const fn (c_int) callconv(.C) void,
-    };
-    pub const sigaction_fn = switch (builtin.zig_backend) {
-        .stage1 => fn (c_int, *const siginfo_t, ?*const anyopaque) callconv(.C) void,
-        else => *const fn (c_int, *const siginfo_t, ?*const anyopaque) callconv(.C) void,
-    };
+    pub const handler_fn = std.meta.FnPtr(fn (c_int) callconv(.C) void);
+    pub const sigaction_fn = std.meta.FnPtr(fn (c_int, *const siginfo_t, ?*const anyopaque) callconv(.C) void);
 
     handler: extern union {
         handler: ?handler_fn,

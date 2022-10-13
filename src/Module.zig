@@ -142,7 +142,7 @@ job_queued_update_builtin_zig: bool = true,
 /// This makes it so that we can run `zig test` on the standard library.
 /// Otherwise, the logic for scanning test decls skips all of them because
 /// `main_pkg != std_pkg`.
-main_pkg_in_std: bool,
+main_pkg_is_std: bool,
 
 compile_log_text: ArrayListUnmanaged(u8) = .{},
 
@@ -2445,8 +2445,8 @@ pub const SrcLoc = struct {
                 const case_nodes = tree.extra_data[extra.start..extra.end];
                 for (case_nodes) |case_node| {
                     const case = switch (node_tags[case_node]) {
-                        .switch_case_one => tree.switchCaseOne(case_node),
-                        .switch_case => tree.switchCase(case_node),
+                        .switch_case_one, .switch_case_inline_one => tree.switchCaseOne(case_node),
+                        .switch_case, .switch_case_inline => tree.switchCase(case_node),
                         else => unreachable,
                     };
                     const is_special = (case.ast.values.len == 0) or
@@ -2469,8 +2469,8 @@ pub const SrcLoc = struct {
                 const case_nodes = tree.extra_data[extra.start..extra.end];
                 for (case_nodes) |case_node| {
                     const case = switch (node_tags[case_node]) {
-                        .switch_case_one => tree.switchCaseOne(case_node),
-                        .switch_case => tree.switchCase(case_node),
+                        .switch_case_one, .switch_case_inline_one => tree.switchCaseOne(case_node),
+                        .switch_case, .switch_case_inline => tree.switchCase(case_node),
                         else => unreachable,
                     };
                     const is_special = (case.ast.values.len == 0) or
@@ -2491,8 +2491,8 @@ pub const SrcLoc = struct {
                 const case_node = src_loc.declRelativeToNodeIndex(node_off);
                 const node_tags = tree.nodes.items(.tag);
                 const case = switch (node_tags[case_node]) {
-                    .switch_case_one => tree.switchCaseOne(case_node),
-                    .switch_case => tree.switchCase(case_node),
+                    .switch_case_one, .switch_case_inline_one => tree.switchCaseOne(case_node),
+                    .switch_case, .switch_case_inline => tree.switchCase(case_node),
                     else => unreachable,
                 };
                 const start_tok = case.payload_token.?;
@@ -3494,7 +3494,7 @@ fn freeExportList(gpa: Allocator, export_list: []*Export) void {
 const data_has_safety_tag = @sizeOf(Zir.Inst.Data) != 8;
 // TODO This is taking advantage of matching stage1 debug union layout.
 // We need a better language feature for initializing a union with
-// a runtime known tag.
+// a runtime-known tag.
 const Stage1DataLayout = extern struct {
     data: [8]u8 align(@alignOf(Zir.Inst.Data)),
     safety_tag: u8,
@@ -4430,11 +4430,14 @@ pub fn semaFile(mod: *Module, file: *File) SemaError!void {
     new_decl.has_linksection_or_addrspace = false;
     new_decl.ty = ty_ty;
     new_decl.val = struct_val;
+    new_decl.@"align" = 0;
+    new_decl.@"linksection" = null;
     new_decl.has_tv = true;
     new_decl.owns_tv = true;
     new_decl.alive = true; // This Decl corresponds to a File and is therefore always alive.
     new_decl.analysis = .in_progress;
     new_decl.generation = mod.generation;
+    new_decl.name_fully_qualified = true;
 
     if (file.status == .success_zir) {
         assert(file.zir_loaded);
@@ -4475,9 +4478,17 @@ pub fn semaFile(mod: *Module, file: *File) SemaError!void {
                 try reportRetryableFileError(mod, file, "unable to load source: {s}", .{@errorName(err)});
                 return error.AnalysisFail;
             };
-            const resolved_path = try file.pkg.root_src_directory.join(gpa, &.{
-                file.sub_file_path,
-            });
+
+            const resolved_path = std.fs.path.resolve(
+                gpa,
+                if (file.pkg.root_src_directory.path) |pkg_path|
+                    &[_][]const u8{ pkg_path, file.sub_file_path }
+                else
+                    &[_][]const u8{file.sub_file_path},
+            ) catch |err| {
+                try reportRetryableFileError(mod, file, "unable to resolve path: {s}", .{@errorName(err)});
+                return error.AnalysisFail;
+            };
             errdefer gpa.free(resolved_path);
 
             try man.addFilePostContents(resolved_path, source.bytes, source.stat);
@@ -4583,7 +4594,7 @@ fn semaDecl(mod: *Module, decl_index: Decl.Index) !bool {
     const decl_linksection: ?[*:0]const u8 = blk: {
         const linksection_ref = decl.zirLinksectionRef();
         if (linksection_ref == .none) break :blk null;
-        const bytes = try sema.resolveConstString(&block_scope, section_src, linksection_ref, "linksection must be comptime known");
+        const bytes = try sema.resolveConstString(&block_scope, section_src, linksection_ref, "linksection must be comptime-known");
         if (mem.indexOfScalar(u8, bytes, 0) != null) {
             return sema.fail(&block_scope, section_src, "linksection cannot contain null bytes", .{});
         } else if (bytes.len == 0) {
@@ -5171,7 +5182,7 @@ fn scanDecl(iter: *ScanDeclIter, decl_sub_index: usize, flags: u4) Allocator.Err
                 // the test name filter.
                 if (!comp.bin_file.options.is_test) break :blk false;
                 if (decl_pkg != mod.main_pkg) {
-                    if (!mod.main_pkg_in_std) break :blk false;
+                    if (!mod.main_pkg_is_std) break :blk false;
                     const std_pkg = mod.main_pkg.table.get("std").?;
                     if (std_pkg != decl_pkg) break :blk false;
                 }
@@ -5182,7 +5193,7 @@ fn scanDecl(iter: *ScanDeclIter, decl_sub_index: usize, flags: u4) Allocator.Err
                 if (!is_named_test) break :blk false;
                 if (!comp.bin_file.options.is_test) break :blk false;
                 if (decl_pkg != mod.main_pkg) {
-                    if (!mod.main_pkg_in_std) break :blk false;
+                    if (!mod.main_pkg_is_std) break :blk false;
                     const std_pkg = mod.main_pkg.table.get("std").?;
                     if (std_pkg != decl_pkg) break :blk false;
                 }
@@ -5937,8 +5948,8 @@ pub const SwitchProngSrc = union(enum) {
         var scalar_i: u32 = 0;
         for (case_nodes) |case_node| {
             const case = switch (node_tags[case_node]) {
-                .switch_case_one => tree.switchCaseOne(case_node),
-                .switch_case => tree.switchCase(case_node),
+                .switch_case_one, .switch_case_inline_one => tree.switchCaseOne(case_node),
+                .switch_case, .switch_case_inline => tree.switchCase(case_node),
                 else => unreachable,
             };
             if (case.ast.values.len == 0)
