@@ -4125,7 +4125,7 @@ fn validateStructInit(
 ) CompileError!void {
     const gpa = sema.gpa;
 
-    // Maps field index to field_ptr index of where it was already initialized.
+    // Maps field_type index to field_ptr index of where it was already initialized.
     const found_fields = try gpa.alloc(Zir.Inst.Index, struct_ty.structFieldCount());
     defer gpa.free(found_fields);
     mem.set(Zir.Inst.Index, found_fields, 0);
@@ -15674,7 +15674,7 @@ fn zirTypeInfo(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Ai
                 union_field_fields.* = .{
                     // name: []const u8,
                     name_val,
-                    // field_type: type,
+                    // type: type,
                     try Value.Tag.ty.create(fields_anon_decl.arena(), field.ty),
                     // alignment: comptime_int,
                     try Value.Tag.int_u64.create(fields_anon_decl.arena(), alignment),
@@ -15787,7 +15787,7 @@ fn zirTypeInfo(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Ai
                         struct_field_fields.* = .{
                             // name: []const u8,
                             name_val,
-                            // field_type: type,
+                            // type: type,
                             try Value.Tag.ty.create(fields_anon_decl.arena(), field_ty),
                             // default_value: ?*const anyopaque,
                             try default_val_ptr.copy(fields_anon_decl.arena()),
@@ -15832,7 +15832,7 @@ fn zirTypeInfo(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Ai
                     struct_field_fields.* = .{
                         // name: []const u8,
                         name_val,
-                        // field_type: type,
+                        // type: type,
                         try Value.Tag.ty.create(fields_anon_decl.arena(), field.ty),
                         // default_value: ?*const anyopaque,
                         try default_val_ptr.copy(fields_anon_decl.arena()),
@@ -18467,8 +18467,8 @@ fn zirReify(sema: *Sema, block: *Block, extended: Zir.Inst.Extended.InstData, in
                 // TODO use reflection instead of magic numbers here
                 // name: []const u8
                 const name_val = field_struct_val[0];
-                // field_type: type,
-                const field_type_val = field_struct_val[1];
+                // type: type,
+                const type_val = field_struct_val[1];
                 // alignment: comptime_int,
                 const alignment_val = field_struct_val[2];
 
@@ -18503,7 +18503,7 @@ fn zirReify(sema: *Sema, block: *Block, extended: Zir.Inst.Extended.InstData, in
 
                 var buffer: Value.ToTypeBuffer = undefined;
                 gop.value_ptr.* = .{
-                    .ty = try field_type_val.toType(&buffer).copy(new_decl_arena_allocator),
+                    .ty = try type_val.toType(&buffer).copy(new_decl_arena_allocator),
                     .abi_align = @intCast(u32, (try alignment_val.getUnsignedIntAdvanced(target, sema)).?),
                 };
             }
@@ -18680,9 +18680,9 @@ fn reifyStruct(
         // TODO use reflection instead of magic numbers here
         // name: []const u8
         const name_val = field_struct_val[0];
-        // field_type: type,
-        const field_type_val = field_struct_val[1];
-        //default_value: ?*const anyopaque,
+        // type: type,
+        const type_val = field_struct_val[1];
+        // default_value: ?*const anyopaque,
         const default_value_val = field_struct_val[2];
         // is_comptime: bool,
         const is_comptime_val = field_struct_val[3];
@@ -18746,7 +18746,7 @@ fn reifyStruct(
 
         var buffer: Value.ToTypeBuffer = undefined;
         gop.value_ptr.* = .{
-            .ty = try field_type_val.toType(&buffer).copy(new_decl_arena_allocator),
+            .ty = try type_val.toType(&buffer).copy(new_decl_arena_allocator),
             .abi_align = abi_align,
             .default_val = default_val,
             .is_comptime = is_comptime_val.toBool(),
@@ -31176,7 +31176,7 @@ pub fn addExtraAssumeCapacity(sema: *Sema, extra: anytype) u32 {
     const fields = std.meta.fields(@TypeOf(extra));
     const result = @intCast(u32, sema.air_extra.items.len);
     inline for (fields) |field| {
-        sema.air_extra.appendAssumeCapacity(switch (field.field_type) {
+        sema.air_extra.appendAssumeCapacity(switch (field.type) {
             u32 => @field(extra, field.name),
             Air.Inst.Ref => @enumToInt(@field(extra, field.name)),
             i32 => @bitCast(u32, @field(extra, field.name)),

@@ -3,7 +3,7 @@ const Untagged = @Type(.{
         .layout = .Auto,
         .tag_type = null,
         .fields = &.{
-            .{ .name = "foo", .field_type = opaque {}, .alignment = 1 },
+            .{ .name = "foo", .type = opaque {}, .alignment = 1 },
         },
         .decls = &.{},
     },
