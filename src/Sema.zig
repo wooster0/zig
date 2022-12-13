@@ -15223,7 +15223,7 @@ fn zirTypeInfo(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Ai
                     Value.makeBool(is_generic),
                     // is_noalias: bool,
                     Value.false, // TODO
-                    // arg_type: ?type,
+                    // type: ?type,
                     param_ty_val,
                 };
                 param_val.* = try Value.Tag.aggregate.create(params_anon_decl.arena(), param_fields);
@@ -18586,7 +18586,7 @@ fn zirReify(sema: *Sema, block: *Block, extended: Zir.Inst.Extended.InstData, in
                 const arg_is_generic = arg_val[0].toBool();
                 // is_noalias: bool,
                 const arg_is_noalias = arg_val[1].toBool();
-                // arg_type: ?type,
+                // type: ?type,
                 const param_type_val = arg_val[2];
 
                 if (arg_is_generic) {
@@ -18599,7 +18599,7 @@ fn zirReify(sema: *Sema, block: *Block, extended: Zir.Inst.Extended.InstData, in
                 }
 
                 const param_type = param_type_val.optionalValue() orelse
-                    return sema.fail(block, src, "Type.Fn.Param.arg_type must be non-null for @Type", .{});
+                    return sema.fail(block, src, "Type.Fn.Param.type must be non-null for @Type", .{});
 
                 param_types[i] = try param_type.toType(&buf).copy(sema.arena);
                 comptime_params[i] = false;
