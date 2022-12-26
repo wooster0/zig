@@ -315,33 +315,28 @@ pub const File = struct {
         errdefer if (use_lld) allocator.free(sub_path);
 
         const file: *File = f: {
+            if (build_options.only_c) assert(options.target.ofmt == .c);
             switch (options.target.ofmt) {
                 .coff => {
-                    if (build_options.only_c) unreachable;
                     break :f &(try Coff.openPath(allocator, sub_path, options)).base;
                 },
                 .elf => {
-                    if (build_options.only_c) unreachable;
                     break :f &(try Elf.openPath(allocator, sub_path, options)).base;
                 },
                 .macho => unreachable,
                 .plan9 => {
-                    if (build_options.only_c) unreachable;
                     break :f &(try Plan9.openPath(allocator, sub_path, options)).base;
                 },
                 .wasm => {
-                    if (build_options.only_c) unreachable;
                     break :f &(try Wasm.openPath(allocator, sub_path, options)).base;
                 },
                 .c => {
                     break :f &(try C.openPath(allocator, sub_path, options)).base;
                 },
                 .spirv => {
-                    if (build_options.only_c) unreachable;
                     break :f &(try SpirV.openPath(allocator, sub_path, options)).base;
                 },
                 .nvptx => {
-                    if (build_options.only_c) unreachable;
                     break :f &(try NvPtx.openPath(allocator, sub_path, options)).base;
                 },
                 .hex => return error.HexObjectFormatUnimplemented,
@@ -588,21 +583,19 @@ pub const File = struct {
         base.options.frameworks.deinit(base.allocator);
         base.options.system_libs.deinit(base.allocator);
         base.options.force_undefined_symbols.deinit(base.allocator);
+        if (build_options.only_c) assert(base.tag == .c);
         switch (base.tag) {
             .coff => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(Coff, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
             },
             .elf => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(Elf, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
             },
             .macho => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(MachO, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
@@ -613,25 +606,21 @@ pub const File = struct {
                 base.allocator.destroy(parent);
             },
             .wasm => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(Wasm, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
             },
             .spirv => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(SpirV, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
             },
             .plan9 => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(Plan9, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
             },
             .nvptx => {
-                if (build_options.only_c) unreachable;
                 const parent = @fieldParentPtr(NvPtx, "base", base);
                 parent.deinit();
                 base.allocator.destroy(parent);
