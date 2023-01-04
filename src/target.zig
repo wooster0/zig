@@ -531,6 +531,7 @@ pub fn atomicPtrAlignment(
         .avr,
         .msp430,
         .spu_2,
+        .@"6502",
         => 16,
 
         .arc,
