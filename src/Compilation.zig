@@ -6065,6 +6065,7 @@ pub fn getZigBackend(comp: Compilation) std.builtin.CompilerBackend {
         .riscv64 => .stage2_riscv64,
         .sparc64 => .stage2_sparc64,
         .spirv64 => .stage2_spirv64,
+        .@"6502" => .stage2_6502,
         else => .other,
     };
 }

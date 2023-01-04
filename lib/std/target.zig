@@ -17,6 +17,7 @@ pub const Target = struct {
             freestanding,
             ananas,
             cloudabi,
+            c64,
             dragonfly,
             freebsd,
             fuchsia,
@@ -241,6 +242,7 @@ pub const Target = struct {
                     .freestanding,
                     .ananas,
                     .cloudabi,
+                    .c64,
                     .fuchsia,
                     .kfreebsd,
                     .lv2,
@@ -423,6 +425,7 @@ pub const Target = struct {
                 .freestanding,
                 .ananas,
                 .cloudabi,
+                .c64,
                 .fuchsia,
                 .kfreebsd,
                 .lv2,
@@ -480,6 +483,7 @@ pub const Target = struct {
     pub const wasm = @import("target/wasm.zig");
     pub const x86 = @import("target/x86.zig");
     pub const xtensa = @import("target/xtensa.zig");
+    pub const @"6502" = @import("target/6502.zig");
 
     pub const Abi = enum {
         none,
@@ -577,6 +581,7 @@ pub const Target = struct {
                 .liteos, // TODO: audit this
                 .solaris,
                 .illumos,
+                .c64,
                 => return .none,
             }
         }
@@ -879,6 +884,7 @@ pub const Target = struct {
             renderscript32,
             renderscript64,
             ve,
+            @"6502",
             // Stage1 currently assumes that architectures above this comment
             // map one-to-one with the ZigLLVM_ArchType enum.
             spu_2,
@@ -1049,6 +1055,7 @@ pub const Target = struct {
                     .spirv64 => .NONE,
                     .loongarch32 => .NONE,
                     .loongarch64 => .NONE,
+                    .@"6502" => .NONE,
                 };
             }
 
@@ -1167,6 +1174,7 @@ pub const Target = struct {
                     .loongarch32,
                     .loongarch64,
                     .arc,
+                    .@"6502",
                     => .Little,
 
                     .armeb,
@@ -1499,6 +1507,7 @@ pub const Target = struct {
             .macos,
             .uefi,
             .windows,
+            .c64,
             .emscripten,
             .opencl,
             .glsl450,
@@ -1642,6 +1651,7 @@ pub const Target = struct {
                 .avr,
                 .spirv32,
                 .spirv64,
+                .@"6502",
                 => return result,
 
                 // TODO go over each item in this list and either move it to the above list, or
@@ -1689,6 +1699,7 @@ pub const Target = struct {
             .uefi,
             .windows,
             .emscripten,
+            .c64,
             .wasi,
             .opencl,
             .glsl450,
@@ -1757,7 +1768,9 @@ pub const Target = struct {
     pub fn maxIntAlignment(target: Target) u16 {
         return switch (target.cpu.arch) {
             .avr => 1,
-            .msp430 => 2,
+            .msp430,
+            .@"6502",
+            => 2,
             .xcore => 4,
 
             .arm,
@@ -1854,6 +1867,7 @@ pub const Target = struct {
             .avr,
             .msp430,
             .spu_2,
+                    .@"6502",
             => return 16,
 
             .arc,
@@ -2386,6 +2400,7 @@ pub const Target = struct {
                     else => 8,
                 },
 
+                .@"6502",
                 .msp430,
                 .avr,
                 => 2,
@@ -2509,7 +2524,9 @@ pub const Target = struct {
         return @min(
             std.math.ceilPowerOfTwoAssert(u16, (c_type_bit_size(target, c_type) + 7) / 8),
             switch (target.cpu.arch) {
-                .msp430 => @as(u16, 2),
+                .@"6502",
+                .msp430,
+                => @as(u16, 2),
 
                 .csky,
                 .xcore,
