@@ -2313,7 +2313,7 @@ fn airPtrElemVal(self: *Self, inst: Air.Inst.Index) !void {
         return self.finishAir(inst, .dead, .{ bin_op.lhs, bin_op.rhs, .none });
     }
 
-    // this is identical to the `airPtrElemPtr` codegen expect here an
+    // this is identical to the `airPtrElemPtr` codegen except here an
     // additional `mov` is needed at the end to get the actual value
 
     const ptr_ty = self.air.typeOf(bin_op.lhs);

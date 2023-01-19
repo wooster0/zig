@@ -22,7 +22,7 @@ const Value = @import("value.zig").Value;
 const Zir = @import("Zir.zig");
 
 pub const Result = union(enum) {
-    /// The `code` parameter passed to `generateSymbol` has the value ok.
+    /// Codegen succeeded and the code was written to the `code` argument.
     ok: void,
 
     /// There was a codegen error.

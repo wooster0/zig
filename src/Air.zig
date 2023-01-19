@@ -178,7 +178,7 @@ pub const Inst = struct {
         /// and if an overflow happens, ov is 1. Otherwise ov is 0.
         /// Uses the `ty_pl` field. Payload is `Bin`.
         shl_with_overflow,
-        /// Allocates stack local memory.
+        /// Allocates stack-local memory.
         /// Uses the `ty` field.
         alloc,
         /// If the function will pass the result by-ref, this instruction returns the
@@ -567,7 +567,7 @@ pub const Inst = struct {
         /// Given a pointer to a slice, return a pointer to the pointer of the slice.
         /// Uses the `ty_op` field.
         ptr_slice_ptr_ptr,
-        /// Given an (array value or vector value) and element index,
+        /// Given an array value or vector value and element index,
         /// return the element value at that index.
         /// Result type is the element type of the array operand.
         /// Uses the `bin_op` field.
@@ -708,7 +708,6 @@ pub const Inst = struct {
         /// Uses the `pl_op` field, payload represents the index of the target memory.
         /// The operand is unused and always set to `Ref.none`.
         wasm_memory_size,
-
         /// Implements @wasmMemoryGrow builtin.
         /// Result type is always `i32`,
         /// Uses the `pl_op` field, payload represents the index of the target memory.
@@ -726,7 +725,7 @@ pub const Inst = struct {
         /// Returns pointer to current error return trace.
         err_return_trace,
 
-        /// Sets the operand as the current error return trace,
+        /// Sets the operand as the current error return trace.
         set_err_return_trace,
 
         /// Convert the address space of a pointer.

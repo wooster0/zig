@@ -75,7 +75,8 @@ pub const Options = struct {
     optimize_mode: std.builtin.Mode,
     machine_code_model: std.builtin.CodeModel,
     root_name: [:0]const u8,
-    /// Not every Compilation compiles .zig code! For example you could do `zig build-exe foo.o`.
+    /// This can be null because not every Compilation compiles .zig code!
+    /// For example you could do `zig build-exe foo.o`.
     module: ?*Module,
     dynamic_linker: ?[]const u8,
     /// The root path for the dynamic linker and system libraries (as well as frameworks on Darwin)
@@ -290,7 +291,7 @@ pub const File = struct {
         const use_lld = build_options.have_llvm and options.use_lld; // comptime-known false when !have_llvm
         const sub_path = if (use_lld) blk: {
             if (options.module == null) {
-                // No point in opening a file, we would not write anything to it.
+                // No point in opening a file; we would not write anything to it.
                 // Initialize with empty.
                 return switch (options.target.ofmt) {
                     .coff => &(try Coff.createEmpty(allocator, options)).base,
@@ -454,7 +455,7 @@ pub const File = struct {
         NetNameDeleted,
     };
 
-    /// Called from within the CodeGen to lower a local variable instantion as an unnamed
+    /// Called from within the CodeGen to lower a local variable instantiation as an unnamed
     /// constant. Returns the symbol index of the lowered constant in the read-only section
     /// of the final binary.
     pub fn lowerUnnamedConst(base: *File, tv: TypedValue, decl_index: Module.Decl.Index) UpdateDeclError!u32 {
@@ -840,10 +841,10 @@ pub const File = struct {
     };
 
     /// Get allocated `Decl`'s address in virtual memory.
-    /// The linker is passed information about the containing atom, `parent_atom_index`, and offset within it's
+    /// The linker is passed information about the containing atom, `parent_atom_index`, and offset within its
     /// memory buffer, `offset`, so that it can make a note of potential relocation sites, should the
-    /// `Decl`'s address was not yet resolved, or the containing atom gets moved in virtual memory.
-    /// May be called before or after updateFunc/updateDecl therefore it is up to the linker to allocate
+    /// `Decl`'s address not yet have been resolved, or the containing atom gets moved in virtual memory.
+    /// May be called before or after updateFunc/updateDecl. Therefore it is up to the linker to allocate
     /// the block/atom.
     pub fn getDeclVAddr(base: *File, decl_index: Module.Decl.Index, reloc_info: RelocInfo) !u64 {
         if (build_options.only_c) unreachable;

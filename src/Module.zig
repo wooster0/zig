@@ -500,7 +500,7 @@ pub const Decl = struct {
         /// to require re-analysis.
         outdated,
     },
-    /// Whether `typed_value`, `align`, `linksection` and `addrspace` are populated.
+    /// Whether `ty`, `val`, `align`, `linksection`, and `addrspace` are populated.
     has_tv: bool,
     /// If `true` it means the `Decl` is the resource owner of the type/value associated
     /// with it. That means when `Decl` is destroyed, the cleanup code should additionally

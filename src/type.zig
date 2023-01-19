@@ -3192,7 +3192,7 @@ pub const Type = extern union {
         };
         if (opt_sema) |sema| {
             if (union_obj.status == .field_types_wip) {
-                // We'll guess "pointer-aligned", if the union has an
+                // We'll guess "pointer-aligned". If the union has an
                 // underaligned pointer field then some allocations
                 // might require explicit alignment.
                 return AbiAlignmentAdvanced{ .scalar = @divExact(target.cpu.arch.ptrBitWidth(), 8) };
