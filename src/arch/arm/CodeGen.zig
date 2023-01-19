@@ -6148,8 +6148,6 @@ fn genTypedValue(self: *Self, arg_tv: TypedValue) InnerError!MCValue {
                 };
 
                 return MCValue{ .immediate = unsigned };
-            } else {
-                return self.lowerUnnamedConst(typed_value);
             }
         },
         .Bool => {
