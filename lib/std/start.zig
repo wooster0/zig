@@ -28,7 +28,8 @@ comptime {
         builtin.zig_backend == .stage2_aarch64 or
         builtin.zig_backend == .stage2_arm or
         builtin.zig_backend == .stage2_riscv64 or
-        builtin.zig_backend == .stage2_sparc64)
+        builtin.zig_backend == .stage2_sparc64 or
+        builtin.zig_backend == .stage2_6502)
     {
         if (builtin.output_mode == .Exe) {
             if ((builtin.link_libc or builtin.object_format == .c) and @hasDecl(root, "main")) {
@@ -41,6 +42,8 @@ comptime {
                 }
             } else if (builtin.os.tag == .wasi and @hasDecl(root, "main")) {
                 @export(wasiMain2, .{ .name = "_start" });
+            } else if (builtin.os.tag == .c64 and @hasDecl(root, "main")) {
+                @export(c64_start, .{ .name = "_start" });
             } else {
                 if (!@hasDecl(root, "_start")) {
                     @export(_start2, .{ .name = "_start" });
@@ -128,6 +131,12 @@ fn wasiMain2() callconv(.C) noreturn {
 fn wWinMainCRTStartup2() callconv(.C) noreturn {
     root.main();
     exit2(0);
+}
+
+fn c64_start() callconv(.C) void {
+    // TODO: always inline `main` once that no longer makes the binary contain main's code twice
+    root.main();
+    return; // the RTS generated for this will also exit the program
 }
 
 fn exit2(code: usize) noreturn {
