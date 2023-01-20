@@ -302,6 +302,8 @@ fn writeHeader(prg: Prg) ![]const u8 {
 
 const DeclIndexAndBlock = struct { decl_index: Module.Decl.Index, block: Block };
 
+/// Returns all recorded blocks in block index order.
+/// This is necessary in order to know where exactly a block will end up in the final binary.
 pub fn getAllBlocks(prg: *Prg, allocator: Allocator) ![]const DeclIndexAndBlock {
     var decl_index_and_blocks = std.ArrayList(DeclIndexAndBlock).init(allocator);
     var it1 = prg.blocks.iterator();
