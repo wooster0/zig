@@ -96,9 +96,9 @@ register_manager: RegisterManager = .{},
 
 // TODO: the original Furby used a 6502 chip with 128 bytes of RAM and no Y register.
 //       allow compatibility with such variants of the 6502 using a constraint config like this
-//       based on which we generate code
-//       This also applies to the NES. to be compatible we basically just don't have to use decimal mode (it's the 2A03)
-//       https://en.wikipedia.org/wiki/MOS_Technology_6502#Variations_and_derivatives
+//       based on which we generate conformant code.
+//       This also applies to the NES. to be compatible we basically just don't have to use decimal mode
+//       (it's the 2A03: https://en.wikipedia.org/wiki/MOS_Technology_6502#Variations_and_derivatives)
 //constraints: struct {},
 
 memory: Memory,
@@ -420,7 +420,6 @@ const Branch = struct {
 fn currentBranch(func: *Func) *Branch {
     return &func.branches.items[func.branches.items.len - 1];
 }
-
 
 /// Returns the byte size of a type or null if the byte size is too big.
 /// Assert non-null in contexts where a type is involved where the compiler made sure the bit width is <= 65535.
@@ -1385,7 +1384,6 @@ fn getSize(func: Func) u16 {
     return byte_size;
 }
 
-
 fn getProgramCounter(func: Func) u16 {
     if (func.bin_file.cast(link.File.Prg)) |prg| {
         const load_address = prg.getLoadAddress();
@@ -1823,8 +1821,10 @@ fn parseRegName(name: []const u8) ?Register {
 }
 
 /// Adds an MIR instruction to the output.
+/// See `Mir.Inst.checkCombo` for an explanation on why `data` is `anytype`.
 fn addInst(func: *Func, tag: Mir.Inst.Tag, data: anytype) error{OutOfMemory}!void {
-    // TODO: shouldn't we be able to comptime-force this? `tag` can be `comptime`
+    // TODO: try doing this at comptime by making `tag` and `data` comptime
+    //       (as of writing, making `data` into comptime crashes the compiler)
     if (debug.runtime_safety)
         Mir.Inst.checkCombo(tag, data);
     try func.mir_instructions.append(func.gpa, .{ .tag = tag, .data = @as(Mir.Inst.Data, data) });

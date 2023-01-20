@@ -11,7 +11,7 @@
 //!
 //! This format is used by the Commodore 64, Commodore 16, Commodore 128, and others.
 //!
-//! In the Commodore retro computing space there are a few file formats in use:
+//! In the Commodore retrocomputing space there are a few file formats in use:
 //! * .T64: most .T64 files are .PRG files with an added header.
 //! * .TAP: tape image for making emulator pretend there is a tape. Contains .PRG data.
 //! * .D64: disk image for making emulator pretend there is a disk in a Commodore 1541. Contains .PRG data.
