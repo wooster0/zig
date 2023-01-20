@@ -30,17 +30,18 @@ pub const Inst = struct {
     // * the at most 2 bytes for an absolute address, and
     // * 1 byte for padding (to be a power of two).
     // So if we have for example three PHA (PusH A) instructions, it would take 4 * 3 = 12 bytes for the MIR.
-    // With our current design it takes only 3 bytes for each instruction because because PHA
+    // With our current design it takes only 3 bytes for each instruction because PHA
     // has an implied operand and thus takes no additional data (`Data.none`).
     // This is all possible thanks to `std.MultiArrayList`.
+    /// The instruction's opcode.
     tag: Tag,
+    /// The instruction's addressing mode.
     data: Data,
 
     /// The position of an MIR instruction within the `Mir` instructions array.
     pub const Index = u32;
 
-    /// The 6502 has 151 unique instructions but remember that we do not have to generate all of them.
-    /// Organized into addressing modes, it has 56 instructions.
+    /// The 6502 has 151 unique instructions. Organized into addressing modes, it has 56 instructions.
     ///
     /// We recognize the following addressing modes:
     /// * Implied (impl):
@@ -78,11 +79,11 @@ pub const Inst = struct {
     // It seems simpler to define only the opcodes we actually need. This way it is trivial to extend, too.
     //
     // Design decision note:
-    // What if we had separated mnemonic andaddressing mode into two enums?
-    // For verification we would need a gigantic `switch` checking each combo manually,
-    // or we would not have this safety that this type guarantees.
+    // What if we had separated mnemonic and addressing mode into two enums?
+    // In that case `checkCombo` would need a gigantic `switch` checking each combo manually,
+    // or we would simply not have that kind of safety.
     pub const Tag = enum(u8) {
-        // each tag name must be the opcode's mnemonic plus the addressing mode.
+        // each tag name must be the opcode's mnemonic plus the addressing mode as a suffix.
         // instructions are sorted by opcode.
         // zig fmt: off
         brk_impl     = 0x00, // BRK          ; BReaK
@@ -187,9 +188,18 @@ pub const Inst = struct {
             offset: u16 = 0,
         },
         /// The current address of this word subtracted by the given offset.
-        current: struct { decl_index: @import("../../Module.zig").Decl.Index, offset: u16 },
+        current: struct {
+            decl_index: @import("../../Module.zig").Decl.Index,
+            offset: u16,
+        },
     };
 
+    /// Checks this combination of tag (opcode) and data (addressing mode) and makes sure it evaluates to a valid instruction.
+    /// The reason it is `data: anytype` instead of `data: Data` is that while the argument is comptime-known,
+    /// (TODO: try making it comptime along with `data: anytype` in `Func.addInst`)
+    /// `Data` is a union and the language does not allow us to check which field is active even if
+    /// the union value is comptime-known, so instead we use anonymous structs and check
+    /// that the field name matches the addressing mode suffix of the opcode tag.
     pub fn checkCombo(tag: Tag, data: anytype) void {
         const addr_mode = tag.getAddressingMode();
         const data_ty = @TypeOf(data);
@@ -204,6 +214,7 @@ pub const Inst = struct {
         } else unreachable;
     }
 
+    /// Returns the size of this instruction, including opcode and operand.
     pub fn getByteSize(inst: Inst) u2 {
         const addr_mode = inst.tag.getAddressingMode();
         if (mem.eql(u8, addr_mode, "impl")) {
