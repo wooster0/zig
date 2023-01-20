@@ -64,6 +64,7 @@ liveness: Liveness,
 /// The allocator we will be using throughout.
 gpa: mem.Allocator,
 
+/// The locations of the arguments to this function.
 args: []MValue = &.{},
 /// The index of the current argument that is being resolved in `airArg`.
 arg_index: u16 = 0,
@@ -80,7 +81,7 @@ err_msg: *Module.ErrorMsg = undefined,
 /// or a branch higher (lower index) in the tree.
 branches: std.ArrayListUnmanaged(Branch) = .{},
 
-/// The output of this codegen.
+/// The MIR output of this codegen.
 mir_instructions: std.MultiArrayList(Mir.Inst) = .{},
 //mir_extra: std.ArrayListUnmanaged(u32) = .{},
 
@@ -559,15 +560,15 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory, O
     log.debug("lowering {}...", .{tag});
     return switch (tag) {
         .arg => func.airArg(inst),
-        .add => func.airBinOp(inst, .add),
+        .add => func.airIntBinOp(inst, .add),
         .add_optimized => func.fail("TODO: handle {}", .{tag}),
-        .addwrap => func.airBinOp(inst, .addwrap),
+        .addwrap => func.airIntBinOp(inst, .addwrap),
         .addwrap_optimized,
         .add_sat,
         => func.fail("TODO: handle {}", .{tag}),
-        .sub => func.airBinOp(inst, .sub),
+        .sub => func.airIntBinOp(inst, .sub),
         .sub_optimized => func.fail("TODO: handle {}", .{tag}),
-        .subwrap => func.airBinOp(inst, .subwrap),
+        .subwrap => func.airIntBinOp(inst, .subwrap),
         .subwrap_optimized,
         .sub_sat,
         .mul,
@@ -588,8 +589,8 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory, O
         .mod,
         .mod_optimized,
         => func.fail("TODO: handle {}", .{tag}),
-        .ptr_add => func.airBinOp(inst, .ptr_add),
-        .ptr_sub => func.airBinOp(inst, .ptr_sub),
+        .ptr_add => func.airPtrBinOp(inst, .ptr_add),
+        .ptr_sub => func.airPtrBinOp(inst, .ptr_sub),
         .max,
         .min,
         .add_with_overflow,
@@ -819,21 +820,34 @@ fn airArg(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, mv, &.{});
 }
 
-/// Emits code to perform the given binary operation on two operands of the same type resulting in the same type.
-/// Commutativeness may be taken into account.
-fn airBinOp(func: *Func, inst: Air.Inst.Index, tag: Air.Inst.Tag) !void {
+/// Emits code to perform the given integer binary operation on two operands of the same type, resulting in the same type.
+fn airIntBinOp(func: *Func, inst: Air.Inst.Index, tag: Air.Inst.Tag) !void {
     const bin_op = func.air.instructions.items(.data)[inst].bin_op;
     log.debug("bin_op: {}", .{bin_op});
-
     const lhs = try func.resolveInst(bin_op.lhs);
     const rhs = try func.resolveInst(bin_op.rhs);
     const lhs_ty = func.air.typeOf(bin_op.lhs);
     const rhs_ty = func.air.typeOf(bin_op.rhs);
-
-    const result = try func.binOp(tag, inst, lhs, rhs, lhs_ty, rhs_ty);
-    func.finishAir(inst, result, &.{ bin_op.lhs, bin_op.rhs });
+    const res = try func.binOp(tag, inst, lhs, rhs, lhs_ty, rhs_ty);
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
+/// Emits code to perform the given integer binary operation on two operands LHS (pointer) and RHS (operand) of possible different types,
+/// resulting in the type of LHS (the pointer).
+fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, tag: Air.Inst.Tag) !void {
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const bin_op = func.air.extraData(Air.Bin, ty_pl.payload).data;
+    const ty = func.air.getRefType(ty_pl.ty);
+    const lhs = try func.resolveInst(bin_op.lhs);
+    const rhs = try func.resolveInst(bin_op.rhs);
+    const lhs_ty = func.air.typeOf(bin_op.lhs);
+    const rhs_ty = func.air.typeOf(bin_op.rhs);
+    assert(lhs_ty.eql(ty, func.getMod()));
+    const res = try func.binOp(tag, inst, lhs, rhs, lhs_ty, rhs_ty);
+    return func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+/// Emits code to perform the given binary operation on two operands of possible differing types, resulting in a value of either of the given types.
 /// A binary operation is a rule for combining two operands to produce another value.
 fn binOp(
     func: *Func,
@@ -844,17 +858,16 @@ fn binOp(
     lhs_ty: Type,
     rhs_ty: Type,
 ) !MValue {
-    _ = maybe_inst;
     switch (tag) {
         .add,
         .addwrap,
         .sub,
         .subwrap,
         => {
-            switch (lhs_ty.zigTypeTag()) {
+            assert(lhs_ty.eql(rhs_ty, func.getMod()));
+            const ty = lhs_ty;
+            switch (ty.zigTypeTag()) {
                 .Int => {
-                    assert(lhs_ty.eql(rhs_ty, func.getMod()));
-                    const ty = lhs_ty;
                     return try func.binOpInt(lhs, rhs, ty, tag);
                 },
                 .Float => return func.fail("TODO: support floats", .{}),
@@ -867,14 +880,24 @@ fn binOp(
         => {
             switch (lhs_ty.zigTypeTag()) {
                 .Pointer => {
-                    const op_tag: Air.Inst.Tag = switch (tag) {
-                        .ptr_add => .add,
-                        .ptr_sub => .sub,
-                        else => unreachable,
+                    const ptr_ty = lhs_ty;
+                    const child_ty = switch (ptr_ty.ptrSize()) {
+                        .One => ptr_ty.childType().childType(), // ptr to array, so get array element type
+                        else => ptr_ty.childType(),
                     };
-                    assert(lhs_ty.eql(rhs_ty, func.getMod()));
-                    const ty = lhs_ty;
-                    return try func.binOpInt(lhs, rhs, ty, op_tag);
+                    const child_size = func.getByteSize(child_ty).?;
+                    if (child_size == 1) {
+                        const op_tag: Air.Inst.Tag = switch (tag) {
+                            .ptr_add => .add,
+                            .ptr_sub => .sub,
+                            else => unreachable,
+                        };
+                        // we will simply treat both LHS and and RHS as usize.
+                        // this is fine because wrapping past the end of the address space is undefined behavior.
+                        return try func.binOp(op_tag, maybe_inst, lhs, rhs, Type.usize, Type.usize);
+                    } else {
+                        return func.fail("TODO: implement indexing lists with elements with size > 1 by multiplying", .{});
+                    }
                 },
                 else => unreachable,
             }
@@ -883,7 +906,7 @@ fn binOp(
     }
 }
 
-/// Emits code to perform the given binary operation on two operands of the same size resulting in the same size.
+/// Emits code to perform the given binary operation on two operands of the same size, resulting in the same size.
 /// Supports the native 8-bit integer size as well as any other size.
 /// Commutativeness may be taken into account.
 fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Tag) !MValue {
@@ -946,11 +969,11 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
                         else => {},
                     }
                 } else {
-                    try func.store(reg_a, values.pop(), Type.Tag.init(.u8), Type.Tag.init(.u8));
+                    try func.store(reg_a, values.pop(), Type.u8, Type.u8);
                 }
                 try func.addInstAny("adc", values.pop(), i);
                 assert(values.len == 0);
-                try func.store(res.index(i), reg_a, Type.Tag.init(.u8), Type.Tag.init(.u8));
+                try func.store(res.index(i), reg_a, Type.u8, Type.u8);
             }
             return res;
         },
@@ -969,10 +992,10 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
             const reg_a = .{ .reg = .a };
             var i: u16 = 0;
             while (i < byte_size) : (i += 1) {
-                // get LHS into the accumulator and subtract RHS from it
-                try func.store(reg_a, lhs, ty, ty);
+                // get the LHS byte into the accumulator and subtract the RHS byte from it
+                try func.store(reg_a, lhs.index(i), Type.u8, Type.u8);
                 try func.addInstAny("sbc", rhs, i);
-                try func.store(res.index(i), reg_a, ty, ty);
+                try func.store(res.index(i), reg_a, Type.u8, Type.u8);
             }
 
             return res;
@@ -1047,6 +1070,8 @@ fn store(func: *Func, ptr: MValue, val: MValue, ptr_ty: Type, val_ty: Type) !voi
 
 /// Copies LHS to RHS, preserving all registers not specified in the operation.
 // TODO: register_manager.getReg
+// TODO: merge this into `store` and always takes types instead of byte sizes
+//       because you can simply do `Type.u8` etc. or even `Type.int_unsigned` etc. to get specific sizes
 fn copy(func: *Func, src: MValue, src_size: u16, dst: MValue, dst_size: u16) !void {
     if (src_size == 0)
         return;
