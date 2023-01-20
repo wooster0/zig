@@ -102,6 +102,13 @@ register_manager: RegisterManager = .{},
 //       (it's the 2A03: https://en.wikipedia.org/wiki/MOS_Technology_6502#Variations_and_derivatives)
 //constraints: struct {},
 
+// TODO regarding naming of arch and OS for 6502-related targets:
+// * rename the `c64` OS to c64_basic? cbm_basic?
+// * what if we wanted to add official support for https://c64os.com/? Wouldn't it be 6502-c64_os?
+//   figure this out after testing the other Commodore machines with this backend
+//   and see how compatible they are.
+// * what about the NES? would it be 6502-nes or 6502-freestanding or 2a03-freestanding?
+
 memory: Memory,
 
 // TODO: let the user provide information about the register and flags' initial state so we don't have to assume the initial state is unknown?
@@ -427,25 +434,6 @@ fn currentBranch(func: *Func) *Branch {
 fn getByteSize(func: Func, ty: Type) ?u16 {
     return math.cast(u16, ty.abiSize(func.getTarget()));
 }
-
-// /// Allocates stack-local memory and returns it.
-// fn alloc(func: *Func, size: u16) MValue {
-//     _ = size;
-//     _ = func;
-// }
-
-// /// Loads a value at the given stack offset.
-// fn load(func: *Func, offset: u16) MValue {
-//     _ = offset;
-//     _ = func;
-// }
-
-// /// Stores a value at the given stack offset.
-// fn store(func: *Func, offset: u16, mv: MValue) void {
-//     _ = mv;
-//     _ = offset;
-//     _ = func;
-// }
 
 const CallMValues = struct {
     args: []MValue,
@@ -1004,8 +992,31 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
     }
 }
 
-/// Allocates memory local to the stack (does not have to be cleaned up).
 fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
+    // We have two options here:
+    //
+    // 1. Allocate technically correct stack-local memory by using only the hardware stack and registers,
+    //    which only gives us a bit more than 256 bytes per function.
+    //    To do this, we would use PHA and PLA to push data and store/load bytes using specific offsets into the second page of memory,
+    //    using TSX and TXS to transfer from and to the stack pointer.
+    //    The system itself would "clean up" the memory for us.
+    //    This is how all other codegen backends do this and it works for them because of how big their stack is.
+    //    Choosing this option means we do not have access to the zero page, either, which is crucial for
+    //    efficient code generation and necessary for dereferencing pointers (TODO: confirm this).
+    //    If we chose this option, we would probably only give access to the zero page and absolute memory
+    //    through `addrspace`s.
+    // 2. Allocate from the zero page, absolute memory, and registers,
+    //    which gives us access to all memory at the cost that it is harder to manage
+    //    and we need to keep memory state intact across all function codegens and we have to clean it all up.
+    //    This creates a unique problem no other codegen backend has.
+    //    TODO: talk about how heap memory allocation plays into this.
+    //          how does one write a heap memory allocator for a 6502 target?
+    //          1. use the OS? does the C64 or any OS have some CBM kernal routine to allocate heap memory?
+    //          2. provide a way for the user to reserve a specific number of bytes that it can use in its heap.
+    //             for example, how do I tell the backend I want 0x0800 bytes of the 64 KiB available ones for my heap?
+    //             would we need a new builtin for this? ref: @wasmMemorySize and @wasmMemoryGrow
+    //
+    // We choose the second option.
     const mv = try func.allocMemPtr(inst);
     log.debug("allocated ptr: {}", .{mv});
     func.finishAir(inst, mv, &.{});
@@ -1016,6 +1027,12 @@ fn airRetPtr(func: *Func, inst: Air.Inst.Index) !void {
     log.debug("(ret_ptr) allocated ptr: {}", .{mv});
     func.finishAir(inst, mv, &.{});
 }
+
+// TODO: a generic alloc that allocates either into zp, abs, or a reg
+// fn alloc(func: *Func, size: u16) MValue {
+//     _ = size;
+//     _ = func;
+// }
 
 /// Uses a pointer instruction as the basis for allocating runtime-mutable memory.
 fn allocMemPtr(func: *Func, inst: Air.Inst.Index) !MValue {
@@ -1053,30 +1070,24 @@ fn airStore(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
 }
 
+/// Stores RHS at LHS, preserving all registers not specified in the operation.
+/// For specific bit sizes, use `Type.Tag.int_unsigned.create(allocator, size)` for the type parameters.
+// TODO: register_manager.getReg
 fn store(func: *Func, ptr: MValue, val: MValue, ptr_ty: Type, val_ty: Type) !void {
     const src = val;
     const src_size = func.getByteSize(val_ty).?;
     const dst = ptr;
-    //const dst_size = func.getByteSize(if (ptr.isMem()) ptr_ty.childType() else ptr_ty).?;
     const child_ptr_ty = switch (ptr_ty.zigTypeTag()) {
         .Pointer => ptr_ty.childType(),
         else => ptr_ty,
     };
     const dst_size = func.getByteSize(child_ptr_ty).?;
-    log.debug("I want to write {} bytes to a ptr that can hold at most {} bytes", .{ src_size, dst_size });
 
-    try func.copy(src, src_size, dst, dst_size);
-}
+    log.debug("copying {} bytes of {} to {} which is capable of holding {} bytes", .{ src_size, src, dst, dst_size });
 
-/// Copies LHS to RHS, preserving all registers not specified in the operation.
-// TODO: register_manager.getReg
-// TODO: merge this into `store` and always takes types instead of byte sizes
-//       because you can simply do `Type.u8` etc. or even `Type.int_unsigned` etc. to get specific sizes
-fn copy(func: *Func, src: MValue, src_size: u16, dst: MValue, dst_size: u16) !void {
     if (src_size == 0)
         return;
     assert(src_size <= dst_size);
-    log.debug("copying {} bytes of {} to {} which is capable of holding {} bytes", .{ src_size, src, dst, dst_size });
     switch (src) {
         .none => unreachable,
         .imm => |imm| {
@@ -1454,8 +1465,7 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
     for (call_values.args) |expected, i| {
         const actual = try func.resolveInst(args[i]);
         const arg_ty = func.air.typeOf(args[i]);
-        const byte_size = func.getByteSize(arg_ty).?;
-        try func.copy(actual, byte_size, expected, byte_size);
+        try func.store(expected, actual, arg_ty, arg_ty);
     }
 
     if (func.air.value(callee)) |fn_val| {
@@ -1840,7 +1850,7 @@ pub fn spillInstruction(func: *Func, reg: Register, inst: Air.Inst.Index) !void 
     const branch = &func.branches.items[func.branches.items.len - 1];
     const mem_mv = try func.memory.alloc(1);
     try branch.values.put(func.gpa, Air.indexToRef(inst), mem_mv);
-    try func.copy(reg_mv, 1, mem_mv, 1);
+    try func.store(mem_mv, reg_mv, Type.u8, Type.u8);
 }
 fn parseRegName(name: []const u8) ?Register {
     if (@hasDecl(Register, "parseRegName")) {
@@ -1903,7 +1913,7 @@ fn addInstAny(func: *Func, comptime mnemonic: []const u8, mv: MValue, offset: u1
             const temp = func.memory.zp_free.pop();
             defer func.memory.zp_free.appendAssumeCapacity(temp);
             const ptr = .{ .zp = temp };
-            try func.copy(mv, 1, ptr, 1);
+            try func.store(ptr, mv, Type.u8, Type.u8);
             try func.addInstAny(mnemonic, ptr, 0);
         },
         .zp, .abs, .abs_unresolved => try func.addInstMem(mnemonic, mv, offset),
