@@ -962,6 +962,14 @@ pub const Asm = struct {
     /// The MSB is `is_volatile`.
     /// The rest of the bits are `clobbers_len`.
     flags: u32,
+
+    pub fn is_volatile(@"asm": Asm) bool {
+        return @truncate(u1, @"asm".flags >> 31) != 0;
+    }
+
+    pub fn clobbers_len(@"asm": Asm) u31 {
+        return @truncate(u31, @"asm".flags);
+    }
 };
 
 pub const Cmpxchg = struct {
