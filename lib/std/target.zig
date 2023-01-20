@@ -620,6 +620,8 @@ pub const Target = struct {
         plan9,
         /// Nvidia PTX format
         nvptx,
+        /// Program format
+        prg,
 
         pub fn fileExt(of: ObjectFormat, cpu_arch: Cpu.Arch) [:0]const u8 {
             return switch (of) {
@@ -632,6 +634,7 @@ pub const Target = struct {
                 .plan9 => plan9Ext(cpu_arch),
                 .nvptx => ".ptx",
                 .dxcontainer => ".dxil",
+                .prg => ".prg",
             };
         }
 
@@ -640,10 +643,12 @@ pub const Target = struct {
                 .windows, .uefi => .coff,
                 .ios, .macos, .watchos, .tvos => .macho,
                 .plan9 => .plan9,
+                .c64 => .prg,
                 else => return switch (cpu_arch) {
                     .wasm32, .wasm64 => .wasm,
                     .spirv32, .spirv64 => .spirv,
                     .nvptx, .nvptx64 => .nvptx,
+                    .@"6502" => .prg,
                     else => .elf,
                 },
             };
@@ -1439,6 +1444,7 @@ pub const Target = struct {
             .windows => ".exe",
             .uefi => ".efi",
             .plan9 => plan9Ext(cpu_arch),
+            .c64 => ".prg",
             else => switch (cpu_arch) {
                 .wasm32, .wasm64 => ".wasm",
                 else => "",
@@ -2191,6 +2197,7 @@ pub const Target = struct {
                 .longdouble => return 128,
             },
 
+            .c64,
             .cloudabi,
             .kfreebsd,
             .lv2,

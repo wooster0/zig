@@ -450,6 +450,7 @@ const usage_build_generic =
     \\    macho                   macOS relocatables
     \\    spirv                   Standard, Portable Intermediate Representation V (SPIR-V)
     \\    plan9                   Plan 9 from Bell Labs object format
+    \\    prg                     Little-endian load address followed by program format
     \\    hex  (planned feature)  Intel IHEX
     \\    raw  (planned feature)  Dump machine code directly
     \\  -idirafter [dir]          Add directory to AFTER include search path

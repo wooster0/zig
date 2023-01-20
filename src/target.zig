@@ -232,6 +232,7 @@ pub fn hasLlvmSupport(target: std.Target, ofmt: std.Target.ObjectFormat) bool {
         // LLVM does not support these object formats:
         .c,
         .plan9,
+        .prg,
         => return false,
 
         .coff,

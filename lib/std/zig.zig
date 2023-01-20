@@ -195,6 +195,7 @@ pub fn binNameAlloc(allocator: std.mem.Allocator, options: BinNameOptions) error
         },
         .nvptx => return std.fmt.allocPrint(allocator, "{s}.ptx", .{root_name}),
         .dxcontainer => return std.fmt.allocPrint(allocator, "{s}.dxil", .{root_name}),
+        .prg => return std.fmt.allocPrint(allocator, "{s}.prg", .{root_name}),
     }
 }
 

@@ -5201,7 +5201,7 @@ fn scanDecl(iter: *ScanDeclIter, decl_sub_index: usize, flags: u4) Allocator.Err
                 // in `Decl` to notice that the line number did not change.
                 comp.work_queue.writeItemAssumeCapacity(.{ .update_line_number = decl_index });
             },
-            .c, .wasm, .spirv, .nvptx => {},
+            .c, .wasm, .spirv, .nvptx, .prg => {},
         }
     }
 }
