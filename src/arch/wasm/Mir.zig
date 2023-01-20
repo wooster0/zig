@@ -23,7 +23,7 @@ pub const Inst = struct {
     /// For example, `data` will be an i32 for when `tag` is 'i32_const'.
     data: Data,
 
-    /// The position of a given MIR isntruction with the instruction list.
+    /// The position of a given MIR instruction within the instruction list.
     pub const Index = u32;
 
     /// Contains all possible wasm opcodes the Zig compiler may emit
