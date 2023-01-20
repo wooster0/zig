@@ -1023,6 +1023,7 @@ fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
 }
 
 fn airRetPtr(func: *Func, inst: Air.Inst.Index) !void {
+    // this is equivalent to airAlloc if we do not choose to pass by reference
     const mv = try func.allocMemPtr(inst);
     log.debug("(ret_ptr) allocated ptr: {}", .{mv});
     func.finishAir(inst, mv, &.{});
@@ -1336,6 +1337,7 @@ fn airStructFieldVal(func: *Func, inst: Air.Inst.Index) !void {
 }
 
 fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
+    // this is only a change at the type system level
     const ty_op = func.air.instructions.items(.data)[inst].ty_op;
     const dst_ty = func.air.getRefType(ty_op.ty);
     _ = dst_ty;
@@ -1344,7 +1346,8 @@ fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
 }
 
 fn airPtrToInt(func: *Func, inst: Air.Inst.Index) !void {
-    // nothing to do because pointers are represented as integers, anyway
+    // nothing to do because pointers are represented as integers, anyway.
+    // this is only a change at the type system level.
     const un_op = func.air.instructions.items(.data)[inst].un_op;
     const op = try func.resolveInst(un_op);
     const res = op;
@@ -1406,7 +1409,17 @@ fn airLoop(func: *Func, inst: Air.Inst.Index) !void {
 }
 
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {
+    // examples of the behavior of BRK:
+    // * on the C64 it clears the screen and resets.
+    // * on the C128 it prints "BREAK" followed by the content of
+    //   PC (Program Counter), SR (Status Register),
+    //   AC (ACcumulator), XR (X Register), YR (Y Register),
+    //   and SP (Stack Pointer)
     try func.addInstImpl(.brk_impl);
+    // TODO: some OSs (like the SOS written for the Apple III) apparently use BRK for system calls and the byte following BRK is the syscall number.
+    //       investigate that, interrupts, and the necessity of this NOP more. for now we include it just to be sure because BRK advances the PC by 2.
+    //       https://retrocomputing.stackexchange.com/questions/12291/what-are-uses-of-the-byte-after-brk-instruction-on-6502
+    try func.addInstImpl(.nop_impl);
     func.finishAir(inst, .none, &.{});
 }
 
@@ -1542,7 +1555,7 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
 
     var extra_i = extra.end;
     const outputs = @ptrCast([]const Air.Inst.Ref, func.air.extra[extra_i..][0..extra.data.outputs_len]);
-    // TODO: support outputting specific registers into variables (the other way around)
+    // TODO: support outputting specific registers into variables (so, the other way around)
     assert(outputs.len == 0);
     extra_i += outputs.len;
     const inputs = @ptrCast([]const Air.Inst.Ref, func.air.extra[extra_i..][0..extra.data.inputs_len]);
