@@ -847,7 +847,9 @@ fn binOp(
     _ = maybe_inst;
     switch (tag) {
         .add,
+        .addwrap,
         .sub,
+        .subwrap,
         => {
             switch (lhs_ty.zigTypeTag()) {
                 .Int => {
@@ -954,7 +956,9 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
         },
         .sub, .subwrap => {
             try func.decimal.clear();
-            try func.carry.clear();
+            // for subtraction we have to do the opposite of what we do for addition:
+            // set carry, which for subtraction means we *clear borrow*.
+            try func.carry.set();
             defer func.carry.state = .unknown;
 
             const res = try func.allocMem(ty);
@@ -977,7 +981,7 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
     }
 }
 
-/// Allocates memory local to the stack (does not have to be cleaned up) however possible.
+/// Allocates memory local to the stack (does not have to be cleaned up).
 fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
     const mv = try func.allocMemPtr(inst);
     log.debug("allocated ptr: {}", .{mv});
