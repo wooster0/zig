@@ -263,6 +263,10 @@ pub fn generateSymbol(
         .Pointer => switch (typed_value.val.tag()) {
             .zero, .one, .int_u64, .int_big_positive => {
                 switch (target.cpu.arch.ptrBitWidth()) {
+                    16 => {
+                        const x = typed_value.val.toUnsignedInt(target);
+                        mem.writeInt(u16, try code.addManyAsArray(2), @intCast(u16, x), endian);
+                    },
                     32 => {
                         const x = typed_value.val.toUnsignedInt(target);
                         mem.writeInt(u32, try code.addManyAsArray(4), @intCast(u32, x), endian);

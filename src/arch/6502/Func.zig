@@ -25,30 +25,30 @@ const panic = debug.panic;
 const assert = debug.assert;
 const mem = std.mem;
 const math = std.math;
+const testing = std.testing;
 const log = std.log.scoped(.codegen);
-const link = @import("../../link.zig");
 const Module = @import("../../Module.zig");
+const Decl = Module.Decl;
+const link = @import("../../link.zig");
 const Type = @import("../../type.zig").Type;
 const Value = @import("../../value.zig").Value;
 const Air = @import("../../Air.zig");
-const Mir = @import("Mir.zig");
-const Emit = @import("Emit.zig");
 const Liveness = @import("../../Liveness.zig");
 const codegen = @import("../../codegen.zig");
 const GenerateSymbolError = codegen.GenerateSymbolError;
 const FnResult = codegen.FnResult;
 const DebugInfoOutput = codegen.DebugInfoOutput;
-const Decl = Module.Decl;
-
 const bits = @import("bits.zig");
-const abi = @import("abi.zig");
 const Register = bits.Register;
-const RegisterManager = abi.RegisterManager;
-const RegisterLock = RegisterManager.RegisterLock;
-const regs = abi.regs;
-const gp = abi.RegisterClass.gp;
+const abi = @import("abi.zig");
+const Mir = @import("Mir.zig");
+const Emit = @import("Emit.zig");
 
 const Func = @This();
+
+//
+// input
+//
 
 /// Represents the file for the final output of the whole codegen.
 /// This is the only field that references data preserved across multiple function codegens.
@@ -64,12 +64,16 @@ liveness: Liveness,
 /// The allocator we will be using throughout.
 gpa: mem.Allocator,
 
+//
+// call info
+//
+
 /// The locations of the arguments to this function.
-args: []MValue = &.{},
+args: []MV = undefined,
 /// The index of the current argument that is being resolved in `airArg`.
 arg_index: u16 = 0,
 /// The result location of the return value of the current function.
-ret_mv: MValue = undefined,
+ret_val: MV = undefined,
 
 /// An error message for if codegen fails.
 /// This is set if error.CodegenFail happens.
@@ -85,20 +89,26 @@ branches: std.ArrayListUnmanaged(Branch) = .{},
 mir_instructions: std.MultiArrayList(Mir.Inst) = .{},
 //mir_extra: std.ArrayListUnmanaged(u32) = .{},
 
+//
+// safety
+//
+
 /// After we finished lowering something we need to call `airFinish`.
 /// This is equal to the amount of times we called `airFinish`.
-/// We can use this to check if we forgot to call `airFinish`, which helps finding bugs.
+/// Used to find forgotten calls to `airFinish`.
 air_bookkeeping: if (debug.runtime_safety) usize else void = if (debug.runtime_safety) 0 else {},
+/// Holds the index of the current instruction generated.
+/// Used to prevent clobbering registers unintentionally.
+current_inst: if (debug.runtime_safety) Air.Inst.Index else void = if (debug.runtime_safety) undefined else {},
 
+// TODO: remove these ref links eventually
 // https://github.com/cc65/cc65/blob/master/asminc/c64.inc
 // https://github.com/cc65/cc65/blob/master/asminc/cbm_kernal.inc
-
-register_manager: RegisterManager = .{},
 
 // TODO: the original Furby used a 6502 chip with 128 bytes of RAM and no Y register.
 //       allow compatibility with such variants of the 6502 using a constraint config like this
 //       based on which we generate conformant code.
-//       This also applies to the NES. to be compatible we basically just don't have to use decimal mode
+//       This also applies to the NES. to be compatible we basically just don't have to use decimal mode AFAIUI
 //       (it's the 2A03: https://en.wikipedia.org/wiki/MOS_Technology_6502#Variations_and_derivatives)
 //constraints: struct {},
 
@@ -109,10 +119,35 @@ register_manager: RegisterManager = .{},
 //   and see how compatible they are.
 // * what about the NES? would it be 6502-nes or 6502-freestanding or 2a03-freestanding?
 
+//
+// memory
+//
+// it is encouraged to tell helpers where you think they should put their result in memory
+// TODO: let the user provide information about the register and flags' initial state so we don't have to assume the initial state is unknown?
+//       what if we're embedded into something else? isn't there a 6502 CPU implemented in Minecraft? that way we can avoid setting these flags.
+
+/// Addressable memory state global across all functions.
+/// Helpers: allocMem
 memory: Memory,
 
-// TODO: let the user provide information about the register and flags' initial state so we don't have to assume the initial state is unknown?
-//       what if we're embedded into something else? that way we can avoid setting these flags
+// registers
+//
+// if you wish to mark a register as used but have no AIR instruction to offer,
+// you should probably allocate to addressable memory.
+//
+// helpers: freeReg, takeReg
+
+// TODO: add prefix _owner _user _holder or something to this field.
+//       that would also discourage using them directly.
+/// The AIR instruction that uses the accumulator register, if any.
+reg_a: ?Air.Inst.Index = null,
+/// The AIR instruction that uses the X index register, if any.
+reg_x: ?Air.Inst.Index = null,
+/// The AIR instruction that uses the Y index register, if any.
+reg_y: ?Air.Inst.Index = null,
+
+// status register
+
 /// Whether binary-coded decimal mode is on.
 decimal: Flag(.sed_impl, .cld_impl, "decimal") = .{},
 /// Whether we have a carry bit.
@@ -138,8 +173,6 @@ pub fn generate(
         .air = air,
         .liveness = liveness,
         .gpa = gpa,
-        .args = undefined,
-        .err_msg = undefined,
         .memory = memory,
     };
     defer func.deinit();
@@ -192,8 +225,8 @@ fn getType(func: Func) Type {
     return func.getMod().declPtr(func.getDeclIndex()).ty;
 }
 
-/// Memory Value (MV). This represents the location of a value in memory.
-const MValue = union(enum) {
+/// This represents the location of a value in memory.
+const MemoryValue = union(enum) {
     /// The value has no bits we could represent at runtime.
     none: void,
     /// The value is immediately available.
@@ -218,7 +251,7 @@ const MValue = union(enum) {
     },
 
     /// Returns the given value in memory subscripted by the index in form of an offset.
-    fn index(mv: MValue, offset: u16) MValue {
+    fn index(mv: MV, offset: u16) MV {
         switch (mv) {
             .none => unreachable,
             .imm => |_| {
@@ -229,7 +262,11 @@ const MValue = union(enum) {
                 assert(offset == 0);
                 return mv;
             },
-            .zp => |addr| return .{ .zp = addr + @intCast(u8, offset) },
+            .zp => |addr| {
+                // this is safe and will not cross the page boundary
+                // as long as the zero page allocation happened correctly
+                return .{ .zp = addr + @intCast(u8, offset) };
+            },
             .abs => |addr| return .{ .abs = addr + offset },
             .abs_unresolved => |unresolved| {
                 // we do not want both offsets to be non-zero because it may not be clear in that case what to do
@@ -245,14 +282,16 @@ const MValue = union(enum) {
         }
     }
 };
+// this is common enough to deserve an alias
+const MV = MemoryValue;
 
 fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comptime field_name: []const u8) type {
     return struct {
         const Self = @This();
 
-        const State = enum { set, clear, unknown };
-
         state: State = .unknown,
+
+        const State = enum { set, clear, unknown };
 
         fn set(flag: *Self) !void {
             switch (flag.state) {
@@ -264,7 +303,6 @@ fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comp
                 },
             }
         }
-
         fn clear(flag: *Self) !void {
             switch (flag.state) {
                 .clear => {},
@@ -278,20 +316,75 @@ fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comp
     };
 }
 
+/// Spills the register if not free and associates it with the new instruction.
+fn freeReg(func: *Func, reg: Register, inst: Air.Inst.Index) !MV {
+    const spillReg = struct {
+        fn spillReg(func_inn: *Func, reg_inn: Register, inst_inn: Air.Inst.Index) !void {
+            const val = func_inn.getResolvedInstValue(Air.indexToRef(inst_inn));
+            if (val == .reg)
+                assert(reg_inn == val.reg);
+            const new_home = try func_inn.allocMem(Type.u8);
+            try func_inn.trans(val, new_home, Type.u8, Type.u8);
+            try func_inn.currentBranch().values.put(func_inn.gpa, Air.indexToRef(inst_inn), new_home);
+        }
+    }.spillReg;
+
+    switch (reg) {
+        .a => {
+            if (func.reg_a) |old_inst| {
+                assert(inst != old_inst); // TODO: can it happen that they're the same?
+                // TODO: use PHA and PLA to spill using the hardware stack?
+                //       if yes, how do we best associate the PLA with the inst and emit it when the inst dies?
+                //       also, can we TXA and TYA below and do it there too? measure total cycles of each solution
+                try spillReg(func, reg, old_inst);
+            }
+            func.reg_a = inst;
+        },
+        .x => {
+            if (func.reg_x) |old_inst| {
+                assert(inst != old_inst); // TODO: can it happen that they're the same?
+                try spillReg(func, reg, old_inst);
+            }
+            func.reg_x = inst;
+        },
+        .y => {
+            if (func.reg_y) |old_inst| {
+                assert(inst != old_inst); // TODO: can it happen that they're the same?
+                try spillReg(func, reg, old_inst);
+            }
+            func.reg_y = inst;
+        },
+    }
+    return .{ .reg = reg };
+}
+
+/// Assumes the given register is now owned by the new instruction and associates it with the new instruction.
+fn takeReg(func: *Func, reg: Register, inst: Air.Inst.Index) MV {
+    switch (reg) {
+        .a => func.reg_a = inst,
+        .x => func.reg_x = inst,
+        .y => func.reg_y = inst,
+    }
+    return .{ .reg = reg };
+}
+
+/// This represents the system's addressable memory where each byte has an address.
 const Memory = struct {
     /// Memory addresses in the first page of memory available for storage.
     /// This is expensive, sparsely available memory and very valuable because
     /// writing and reading from it is faster than for absolute memory.
-    /// This must always contain at least one address for general-purpose.
-    zp_free: std.BoundedArray(u8, 256) = .{},
+    /// This must always contain at least two free addresses for pointer derefencing.
+    zp_free: std.BoundedArray(u8, 256),
     /// The offset at which free absolute memory starts.
     /// Must not start in zero page. Must be contiguously free memory.
-    /// This is like a stack because it grows downwards.
-    ///
-    /// You can call this the software stack.
+    /// This can be called a software stack because it grows downwards
+    /// and emulates a stack similar to the hardware stack but is typically much bigger than 256 bytes.
     abs_offset: u16,
-    // TODO(solution): record all alloc() calls and where they came from (src_loc) and then if the last record's abs_offset is <= program_size,
-    //                 report an error for the specific alloc that crashed the stack into the program
+    // TODO: record all alloc() calls and where they came from (src_loc) and then after we know the total program size,
+    //       if the last record's abs_offset is <= program_size,
+    //       report an error for the specific alloc that crashed the stack into the program
+    //
+    //       alternatively, associate each alloc with an AIR instruction and track it that way?
     ///// The absolute memory address at which memory ends.
     //abs_end: u16,
 
@@ -300,7 +393,7 @@ const Memory = struct {
             if (prg.zp_free != null and prg.abs_offset != null) {
                 const zp_free = prg.zp_free.?;
                 const abs_offset = prg.abs_offset.?;
-                return Memory{
+                return .{
                     .zp_free = zp_free,
                     .abs_offset = abs_offset,
                 };
@@ -308,18 +401,19 @@ const Memory = struct {
         } else unreachable;
 
         const zp_free = abi.getZeroPageAddresses(target);
-
-        if (debug.runtime_safety and !std.sort.isSorted(u8, zp_free.constSlice(), {}, std.sort.asc(u8)))
-            @panic("zero page addresses must be sorted low to high");
-
         const abs_offset = abi.getAbsoluteMemoryOffset(target);
-
-        //const gp_zp = zp_free.pop();
-
-        return Memory{
+        return .{
             .zp_free = zp_free,
             .abs_offset = abs_offset,
         };
+    }
+
+    /// Allocates two bytes specifically from the zero page for the purpose of storing a pointer address and dereferencing that pointer.
+    fn allocZeroPageDerefAddress(memory: *Memory) !MV {
+        if (memory.allocZeroPageMemory(2)) |addr|
+            return addr;
+        const func = @fieldParentPtr(Func, "memory", memory);
+        return func.fail("unable to dereference pointer due to zero page shortage", .{});
     }
 
     /// Preserves the current memory state for the next function's codegen.
@@ -340,8 +434,8 @@ const Memory = struct {
     }
 
     /// Returns a memory address pointing to the start of the newly-allocated amount of bytes.
-    /// Returns either MValue.zp or MValue.abs.
-    fn alloc(memory: *Memory, byte_count: u16) !MValue {
+    /// Returns either MV.zp or MV.abs.
+    fn alloc(memory: *Memory, byte_count: u16) !MV {
         log.debug("allocating {} bytes", .{byte_count});
 
         const use_zero_page =
@@ -353,59 +447,100 @@ const Memory = struct {
             // we like single-byte allocations because we think it helps
             // the zero page be used for as many different things as possible,
             // meaning the zero page's efficiency can spread to more code,
-            // but we must still not allow the zero page to deplete
-            (byte_count == 1 and memory.zp_free.len > 1);
+            // but we must still make sure the zero page has at least 2 addresses free
+            (byte_count == 1 and memory.zp_free.len > 2);
 
         if (use_zero_page) {
-            // find a matching number of free bytes, each with an address only 1 apart from the one before it (contiguous)
-            const addrs = memory.zp_free.constSlice();
-            log.debug("addrs: {any}", .{addrs});
-            var maybe_contig_addr_i: ?u8 = null;
-            for (addrs) |curr_addr, i| {
-                if (i + 1 == addrs.len)
-                    break;
-                const next_addr = addrs[i + 1];
-                const diff = next_addr - curr_addr;
-                assert(diff != 0); // otherwise we have a duplicate zero page address
-                const is_beside = diff == 1;
-                if (is_beside) {
-                    if (maybe_contig_addr_i == null)
-                        maybe_contig_addr_i = @intCast(u8, i);
-                } else {
-                    // no longer contiguous; try again
-                    maybe_contig_addr_i = null;
-                }
-            }
-            if (maybe_contig_addr_i) |contig_addr_i| {
-                if (contig_addr_i + byte_count >= memory.zp_free.len) {
-                    log.debug("removing {} bytes from the ZP", .{byte_count});
-                    const start = memory.zp_free.swapRemove(contig_addr_i);
-                    var i: u16 = 1;
-                    while (i < byte_count) : (i += 1)
-                        _ = memory.zp_free.swapRemove(contig_addr_i);
-                    std.sort.sort(u8, memory.zp_free.slice(), {}, std.sort.asc(u8));
-                    return MValue{ .zp = start };
-                }
-            }
+            if (memory.allocZeroPageMemory(byte_count)) |addr|
+                return addr;
         }
 
-        //if (addr == abs.abs_end) {
-        //    const func = @fieldParentPtr(Func, "memory", memory);
-        //    return func.fail("program depleted all registers and all 64 KiB of memory", .{}),
-        //}
-        memory.abs_offset -= byte_count; // grow the stack downwards
-        return MValue{ .abs = memory.abs_offset };
+        if (memory.allocAbsoluteMemory(byte_count)) |addr|
+            return addr;
+
+        // OOM
+        // TODO: test this error
+        const func = @fieldParentPtr(Func, "memory", memory);
+        var depleted_total: u16 = 0;
+        const zp_free = abi.getZeroPageAddresses(func.getTarget());
+        depleted_total += @intCast(u8, zp_free.len);
+        const abs_offset = abi.getAbsoluteMemoryOffset(func.getTarget());
+        depleted_total += abs_offset; // TODO: `- abs_end`
+        return func.fail("program depleted all {} bytes of memory", .{depleted_total});
     }
 
-    fn free(memory: *Memory, value: MValue, ty: Type) void {
+    /// Returns null if OOM or if no contiguous bytes were found.
+    fn allocZeroPageMemory(memory: *Memory, byte_count: u16) ?MV {
+        assert(byte_count != 0);
+        const addrs = memory.zp_free.constSlice();
+        if (debug.runtime_safety and !std.sort.isSorted(u8, addrs, {}, std.sort.asc(u8)))
+            @panic("free zero page addresses must be sorted low to high");
+        // find a matching number of free bytes, each with an address only 1 apart from the one before it (contiguous)
+        var contig_count: u8 = 0;
+        var contig_addr_i: u8 = 0;
+        var i: u8 = 0;
+        while (true) {
+            if (i >= addrs.len)
+                break;
+            const addr1 = addrs[i];
+            i += 1;
+            if (i >= addrs.len)
+                break;
+            const addr2 = addrs[i];
+            i += 1;
+            const contig = addr1 == addr2 - 1;
+            if (contig) {
+                contig_count += 2;
+                if (contig_count == byte_count)
+                    break contig_addr_i;
+            } else {
+                // would this be enough?
+                if (contig_count + 1 == byte_count) {
+                    contig_count += 1;
+                    break contig_addr_i;
+                } else {
+                    // no; reset
+                    contig_count = 1;
+                    contig_addr_i = i;
+                }
+            }
+        } else return null;
+        if (contig_addr_i + byte_count <= memory.zp_free.len) {
+            // TODO: what's generally faster?
+            //       1. multiple `swapRemove`s and then one `std.sort.sort` at the end
+            //       or 2. multiple `orderedRemove` and no `std.sort.sort`?
+            const start_addr = memory.zp_free.swapRemove(contig_addr_i);
+            var times: u16 = 1;
+            while (times < byte_count) : (times += 1)
+                _ = memory.zp_free.swapRemove(contig_addr_i + times);
+            std.sort.sort(u8, memory.zp_free.slice(), {}, std.sort.asc(u8));
+            return MV{ .zp = start_addr };
+        }
+        return null;
+    }
+
+    /// Returns null if OOM.
+    fn allocAbsoluteMemory(memory: *Memory, byte_count: u16) ?MV {
+        assert(byte_count != 0);
+        // TODO:
+        //if (addr == abs.abs_end) {
+        //    return null;
+        //}
+        memory.abs_offset -= byte_count; // grow the stack downwards
+        return MV{ .abs = memory.abs_offset + 1 };
+    }
+
+    fn free(memory: *Memory, value: MV, ty: Type) void {
         const func = @fieldParentPtr(Func, "memory", memory);
         const byte_size = func.getByteSize(ty).?;
         log.debug("I want to free {} bytes", .{byte_size});
         switch (value) {
             .zp => |addr| {
+                // TODO: insert at the right position right away? without sorting after
                 var i: u8 = 0;
                 while (i < byte_size) : (i += 1)
                     memory.zp_free.appendAssumeCapacity(addr + i);
+                std.sort.sort(u8, memory.zp_free.slice(), {}, std.sort.asc(u8));
             },
             .abs => |addr| {
                 // TODO: free memory!
@@ -415,10 +550,53 @@ const Memory = struct {
             else => unreachable,
         }
     }
+
+    test allocZeroPageMemory {
+        var zp_free = std.BoundedArray(u8, 256){};
+        zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 1, 2, 4, 5, 0x80, 0x90 });
+        var memory = Memory{
+            .zp_free = zp_free,
+            .abs_offset = undefined,
+        };
+        try testing.expectEqual(MV{ .zp = 0 }, memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(MV{ .zp = 4 }, memory.allocZeroPageMemory(2).?);
+        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(2));
+        try testing.expectEqual(MV{ .zp = 0x80 }, memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(10));
+        try testing.expectEqual(MV{ .zp = 0x90 }, memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(u8, 0), @intCast(u8, memory.zp_free.len));
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xfe, 0xff });
+        try testing.expectEqual(MV{ .zp = 0xfe }, memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(0xff));
+        try testing.expectEqual(MV{ .zp = 0xff }, memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(1));
+        try testing.expectEqual(@as(u8, 0), @intCast(u8, memory.zp_free.len));
+    }
+
+    test allocAbsoluteMemory {
+        var memory = Memory{
+            .zp_free = undefined,
+            .abs_offset = 0xffff,
+            //.abs_end = 0xfeff,
+        };
+        try testing.expectEqual(MV{ .abs = 0xffff }, memory.allocAbsoluteMemory(1).?);
+        try testing.expectEqual(MV{ .abs = 0xfffe }, memory.allocAbsoluteMemory(1).?);
+        try testing.expectEqual(MV{ .abs = 0xfff0 }, memory.allocAbsoluteMemory(0xe).?);
+        try testing.expectEqual(MV{ .abs = 0xffee }, memory.allocAbsoluteMemory(2).?);
+        try testing.expectEqual(MV{ .abs = 0xff6e }, memory.allocAbsoluteMemory(128).?);
+        //try testing.expectEqual(@as(?MV,null), memory.allocAbsoluteMemory(0xffff).?);
+        try testing.expectEqual(@as(u16, 0xff6d), memory.abs_offset);
+    }
 };
 
+// TODO: are these tests run as part of `zig build test`?
+comptime {
+    _ = Memory;
+}
+
 const Branch = struct {
-    values: std.AutoArrayHashMapUnmanaged(Air.Inst.Ref, MValue) = .{},
+    values: std.AutoArrayHashMapUnmanaged(Air.Inst.Ref, MV) = .{},
 
     fn deinit(branch: *Branch, allocator: mem.Allocator) void {
         branch.values.deinit(allocator);
@@ -431,15 +609,16 @@ fn currentBranch(func: *Func) *Branch {
 
 /// Returns the byte size of a type or null if the byte size is too big.
 /// Assert non-null in contexts where a type is involved where the compiler made sure the bit width is <= 65535.
+/// For specific bit sizes to functions that only take type parameters, use `Type.Tag.int_unsigned.create(allocator, size)`.
 fn getByteSize(func: Func, ty: Type) ?u16 {
     return math.cast(u16, ty.abiSize(func.getTarget()));
 }
 
-const CallMValues = struct {
-    args: []MValue,
-    return_value: MValue,
+const CallMVs = struct {
+    args: []MV,
+    return_value: MV,
 
-    fn deinit(values: *CallMValues, allocator: mem.Allocator) void {
+    fn deinit(values: *CallMVs, allocator: mem.Allocator) void {
         allocator.free(values.args);
     }
 };
@@ -452,14 +631,14 @@ const CallMValues = struct {
 ///
 /// So, this is called both when we call a function and once that function is generated.
 /// In both cases for the same function we will receive the same call values.
-fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMValues {
+fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
     // ref: https://llvm-mos.org/wiki/C_calling_convention
     const cc = fn_ty.fnCallingConvention();
     const param_types = try func.gpa.alloc(Type, fn_ty.fnParamLen());
     defer func.gpa.free(param_types);
     fn_ty.fnParamTypes(param_types);
-    var values = CallMValues{
-        .args = try func.gpa.alloc(MValue, param_types.len),
+    var values = CallMVs{
+        .args = try func.gpa.alloc(MV, param_types.len),
         .return_value = undefined,
     };
     errdefer func.gpa.free(values.args);
@@ -507,7 +686,7 @@ fn gen(func: *Func) !void {
     var call_values = try func.resolveCallingConventionValues(func.getType());
     defer call_values.deinit(func.gpa);
     func.args = call_values.args;
-    func.ret_mv = call_values.return_value;
+    func.ret_val = call_values.return_value;
 
     try func.branches.append(func.gpa, .{});
     defer {
@@ -529,6 +708,9 @@ fn gen(func: *Func) !void {
 fn genBody(func: *Func, body: []const Air.Inst.Index) !void {
     for (body) |inst| {
         const old_bookkeping_value = func.air_bookkeeping;
+
+        if (debug.runtime_safety)
+            func.current_inst = inst;
 
         try func.currentBranch().values.ensureUnusedCapacity(func.gpa, Liveness.bpi);
         try func.genInst(inst);
@@ -612,9 +794,10 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory, O
         .call_always_tail => func.airCall(inst, .always_tail),
         .call_never_tail => func.airCall(inst, .never_tail),
         .call_never_inline => func.airCall(inst, .never_inline),
+        // TODO: can't we simply use compiler_rt for a lot of these?
         .clz,
         .ctz,
-        .popcount,
+        .popcount, // TODO: for this one lib/compiler_rt/popcount.zig for example
         .byte_swap,
         .bit_reverse,
 
@@ -716,11 +899,13 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory, O
         .slice_ptr,
         .ptr_slice_len_ptr,
         .ptr_slice_ptr_ptr,
-        .array_elem_val,
+        => func.fail("TODO: handle {}", .{tag}),
+        .array_elem_val => func.airArrayElemVal(inst),
         .slice_elem_val,
         .slice_elem_ptr,
-        .ptr_elem_val,
-        .ptr_elem_ptr,
+        => func.fail("TODO: handle {}", .{tag}),
+        .ptr_elem_val => func.airPtrElemVal(inst),
+        .ptr_elem_ptr => func.airPtrElemPtr(inst),
         .array_to_slice,
         .float_to_int,
         .float_to_int_optimized,
@@ -780,6 +965,7 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory, O
 
         .vector_store_elem,
 
+        // TODO: should these be supported at all?
         .c_va_arg,
         .c_va_copy,
         .c_va_end,
@@ -797,8 +983,10 @@ fn airArg(func: *Func, inst: Air.Inst.Index) !void {
     func.arg_index += 1;
 
     switch (mv) {
-        .reg => |reg| {
-            func.register_manager.getRegAssumeFree(reg, inst);
+        .reg => |reg| switch (reg) {
+            .a => func.reg_a = inst,
+            .x => func.reg_x = inst,
+            .y => func.reg_y = inst,
         },
         else => {},
     }
@@ -816,7 +1004,7 @@ fn airIntBinOp(func: *Func, inst: Air.Inst.Index, tag: Air.Inst.Tag) !void {
     const rhs = try func.resolveInst(bin_op.rhs);
     const lhs_ty = func.air.typeOf(bin_op.lhs);
     const rhs_ty = func.air.typeOf(bin_op.rhs);
-    const res = try func.binOp(tag, inst, lhs, rhs, lhs_ty, rhs_ty);
+    const res = try func.binOp(tag, lhs, rhs, lhs_ty, rhs_ty, null, inst);
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
@@ -831,7 +1019,7 @@ fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, tag: Air.Inst.Tag) !void {
     const lhs_ty = func.air.typeOf(bin_op.lhs);
     const rhs_ty = func.air.typeOf(bin_op.rhs);
     assert(lhs_ty.eql(ty, func.getMod()));
-    const res = try func.binOp(tag, inst, lhs, rhs, lhs_ty, rhs_ty);
+    const res = try func.binOp(tag, lhs, rhs, lhs_ty, rhs_ty, null, inst);
     return func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
@@ -840,12 +1028,13 @@ fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, tag: Air.Inst.Tag) !void {
 fn binOp(
     func: *Func,
     tag: Air.Inst.Tag,
-    maybe_inst: ?Air.Inst.Index,
-    lhs: MValue,
-    rhs: MValue,
+    lhs: MV,
+    rhs: MV,
     lhs_ty: Type,
     rhs_ty: Type,
-) !MValue {
+    dst: ?MV,
+    inst: Air.Inst.Index,
+) !MV {
     switch (tag) {
         .add,
         .addwrap,
@@ -856,7 +1045,7 @@ fn binOp(
             const ty = lhs_ty;
             switch (ty.zigTypeTag()) {
                 .Int => {
-                    return try func.binOpInt(lhs, rhs, ty, tag);
+                    return try func.intBinOp(lhs, rhs, ty, tag, dst, inst);
                 },
                 .Float => return func.fail("TODO: support floats", .{}),
                 .Vector => return func.fail("TODO: support vectors", .{}),
@@ -882,7 +1071,7 @@ fn binOp(
                         };
                         // we will simply treat both LHS and and RHS as usize.
                         // this is fine because wrapping past the end of the address space is undefined behavior.
-                        return try func.binOp(op_tag, maybe_inst, lhs, rhs, Type.usize, Type.usize);
+                        return try func.binOp(op_tag, lhs, rhs, Type.usize, Type.usize, dst, inst);
                     } else {
                         return func.fail("TODO: implement indexing lists with elements with size > 1 by multiplying", .{});
                     }
@@ -897,13 +1086,21 @@ fn binOp(
 /// Emits code to perform the given binary operation on two operands of the same size, resulting in the same size.
 /// Supports the native 8-bit integer size as well as any other size.
 /// Commutativeness may be taken into account.
-fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Tag) !MValue {
-    const byte_size = func.getByteSize(ty).?;
-
+fn intBinOp(
+    func: *Func,
+    lhs: MV,
+    rhs: MV,
+    ty: Type,
+    bin_op: Air.Inst.Tag,
+    dst: ?MV,
+    inst: Air.Inst.Index,
+) !MV {
     assert(ty.zigTypeTag() == .Int);
 
+    const byte_size = func.getByteSize(ty).?;
+
     switch (bin_op) {
-        // this assembly showcases the addition of two words:
+        // this assembly shows the addition of two words:
         // ```
         // lhs: ; $1150
         //     .byte $50, $11 ; little-endian
@@ -914,6 +1111,7 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
         //
         // add:
         //     clc ; carry flag might be set
+        //     cld ; decimal flag might be set
         //     lda lhs + 0
         //     adc rhs + 0
         //     ; A = $B0
@@ -932,58 +1130,74 @@ fn binOpInt(func: *Func, lhs: MValue, rhs: MValue, ty: Type, bin_op: Air.Inst.Ta
             try func.carry.clear();
             defer func.carry.state = .unknown;
 
-            const res = try func.allocMem(ty);
+            var res = dst;
+            var reg_a: ?MV = null;
 
             log.debug("lhs: {}, rhs: {}", .{ lhs, rhs });
-            try func.register_manager.getReg(.a, null);
-            defer func.register_manager.freeReg(.a);
-            const reg_a = MValue{ .reg = .a };
             var i: u16 = 0;
             while (i < byte_size) : (i += 1) {
                 // take advantage of the fact that addition is commutative,
-                // meaning we can add the operands in any order;
-                // get either of the operands into the accumulator
-                var values = std.BoundedArray(MValue, 2){};
+                // meaning we can add the operands in any order,
+                // so get either of the operands into the accumulator.
+                var values = std.BoundedArray(MV, 2){};
                 values.appendAssumeCapacity(lhs.index(i));
                 values.appendAssumeCapacity(rhs.index(i));
-                for (values.constSlice()) |value, index| {
-                    switch (value) {
-                        .reg => |reg| {
-                            if (reg == .a) {
-                                _ = values.swapRemove(index);
-                                break;
-                            }
-                        },
-                        else => {},
+                for (values.constSlice()) |val, val_i| {
+                    // is either LHS or RHS already in the accumulator?
+                    if (val == .reg and val.reg == .a) {
+                        if (dst == null and byte_size == 1) {
+                            // we can do this if LHS or RHS is the same as the result location
+                            reg_a = func.takeReg(.a, inst);
+                            log.debug("inst: {}, current_inst: {}", .{ inst, func.current_inst });
+                            try func.addInstAny("adc", values.pop());
+                            return reg_a.?;
+                        }
+                        _ = values.swapRemove(val_i);
+                        break;
                     }
                 } else {
-                    try func.store(reg_a, values.pop(), Type.u8, Type.u8);
+                    // neither LHS or RHS is in the accumulator
+                    if (reg_a == null)
+                        reg_a = try func.freeReg(.a, inst);
+                    //try func.load(reg_a, values.pop(), Type.u8);
+                    try func.trans(values.pop(), reg_a.?, Type.u8, Type.u8);
                 }
-                try func.addInstAny("adc", values.pop(), i);
+                try func.addInstAny("adc", values.pop());
                 assert(values.len == 0);
-                try func.store(res.index(i), reg_a, Type.u8, Type.u8);
+                //try func.load(res.index(i), reg_a, Type.u8);
+                if (res == null)
+                    res = try func.allocMem(ty);
+                try func.trans(reg_a.?, res.?.index(i), Type.u8, Type.u8);
             }
-            return res;
+            return res.?;
         },
         .sub, .subwrap => {
             try func.decimal.clear();
             // for subtraction we have to do the opposite of what we do for addition:
-            // set carry, which for subtraction means we *clear borrow*.
+            // we set carry, which for subtraction means we *clear borrow*.
             try func.carry.set();
             defer func.carry.state = .unknown;
 
-            const res = try func.allocMem(ty);
+            if (lhs == .reg and lhs.reg == .a) {
+                if (dst == null and byte_size == 1) {
+                    try func.addInstAny("sbc", rhs);
+                    const reg_a = func.takeReg(.a, inst);
+                    return reg_a;
+                }
+            }
+
+            const res = dst orelse try func.allocMem(ty);
+            const reg_a = try func.freeReg(.a, inst);
 
             log.debug("lhs: {}, rhs: {}", .{ lhs, rhs });
-            try func.register_manager.getReg(.a, null);
-            defer func.register_manager.freeReg(.a);
-            const reg_a = .{ .reg = .a };
             var i: u16 = 0;
             while (i < byte_size) : (i += 1) {
                 // get the LHS byte into the accumulator and subtract the RHS byte from it
-                try func.store(reg_a, lhs.index(i), Type.u8, Type.u8);
-                try func.addInstAny("sbc", rhs, i);
-                try func.store(res.index(i), reg_a, Type.u8, Type.u8);
+                try func.trans(lhs.index(i), reg_a, Type.u8, Type.u8);
+                //try func.load(reg_a, lhs.index(i), Type.u8);
+                try func.addInstAny("sbc", rhs.index(i));
+                try func.trans(reg_a, res.index(i), Type.u8, Type.u8);
+                //try func.load(res.index(i), reg_a, Type.u8);
             }
 
             return res;
@@ -1017,41 +1231,23 @@ fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
     //             would we need a new builtin for this? ref: @wasmMemorySize and @wasmMemoryGrow
     //
     // We choose the second option.
-    const mv = try func.allocMemPtr(inst);
-    log.debug("allocated ptr: {}", .{mv});
-    func.finishAir(inst, mv, &.{});
+    const ptr_ty = func.air.instructions.items(.data)[inst].ty;
+    const res = try func.allocMem(ptr_ty.childType());
+    log.debug("allocated ptr: {}", .{res});
+    func.finishAir(inst, res, &.{});
 }
 
 fn airRetPtr(func: *Func, inst: Air.Inst.Index) !void {
     // this is equivalent to airAlloc if we do not choose to pass by reference
-    const mv = try func.allocMemPtr(inst);
-    log.debug("(ret_ptr) allocated ptr: {}", .{mv});
-    func.finishAir(inst, mv, &.{});
+    const ptr_ty = func.air.instructions.items(.data)[inst].ty;
+    const res = try func.allocMem(ptr_ty.childType());
+    log.debug("(ret_ptr) allocated ptr: {}", .{res});
+    func.finishAir(inst, res, &.{});
 }
 
-// TODO: a generic alloc that allocates either into zp, abs, or a reg
-// fn alloc(func: *Func, size: u16) MValue {
-//     _ = size;
-//     _ = func;
-// }
-
-/// Uses a pointer instruction as the basis for allocating runtime-mutable memory.
-fn allocMemPtr(func: *Func, inst: Air.Inst.Index) !MValue {
-    const ptr_ty: Type = func.air.instructions.items(.data)[inst].ty;
-    const child_ty = ptr_ty.childType();
-    const byte_size = func.getByteSize(child_ty) orelse {
-        return func.fail("type `{}` too big to fit in stack frame", .{child_ty.fmt(func.getMod())});
-    };
-    const abs = try func.memory.alloc(byte_size);
-    return abs;
-}
-
-fn allocMem(func: *Func, ty: Type) !MValue {
-    const byte_size = func.getByteSize(ty).?;
-    if (byte_size == 1) {
-        if (func.register_manager.tryAllocReg(null, gp)) |reg|
-            return .{ .reg = reg };
-    }
+/// Allocates addressable memory capable of storing a value of the given type.
+fn allocMem(func: *Func, ty: Type) !MV {
+    const byte_size = func.getByteSize(ty) orelse return func.fail("type `{}` too big to fit in address space", .{ty.fmt(func.getMod())});
     return try func.memory.alloc(byte_size);
 }
 
@@ -1066,143 +1262,97 @@ fn airStore(func: *Func, inst: Air.Inst.Index) !void {
 
     log.debug("store {} ({}) at {} ({})", .{ val, val_ty.tag(), ptr, ptr_ty.tag() });
 
-    try func.store(ptr, val, ptr_ty, val_ty);
+    //try func.store(val, ptr, val_ty, ptr_ty);
+    try func.trans(val, ptr, val_ty, ptr_ty.childType());
 
     func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
 }
 
-/// Stores RHS at LHS, preserving all registers not specified in the operation.
-/// For specific bit sizes, use `Type.Tag.int_unsigned.create(allocator, size)` for the type parameters.
-// TODO: register_manager.getReg
-fn store(func: *Func, ptr: MValue, val: MValue, ptr_ty: Type, val_ty: Type) !void {
-    const src = val;
-    const src_size = func.getByteSize(val_ty).?;
-    const dst = ptr;
+/// Stores the given value at the given pointer.
+/// This means we write the given value to the pointer.
+/// Preserves all registers not specified in the operation.
+/// The parameter order intentionally resembles the ST* instructions.
+/// If the value is a memory value, *it is the address* that is stored at the pointer, *not the value at that address*.
+fn store(func: *Func, val: MV, ptr: MV, val_ty: Type, ptr_ty: Type) !void {
+    const ptr_size = func.getByteSize(val_ty).?;
     const child_ptr_ty = switch (ptr_ty.zigTypeTag()) {
         .Pointer => ptr_ty.childType(),
         else => ptr_ty,
     };
-    const dst_size = func.getByteSize(child_ptr_ty).?;
+    const val_size = func.getByteSize(child_ptr_ty).?;
 
-    log.debug("copying {} bytes of {} to {} which is capable of holding {} bytes", .{ src_size, src, dst, dst_size });
+    log.debug("storing {} bytes of {} to {} which is capable of holding {} bytes", .{ val_size, val, ptr, ptr_size });
 
-    if (src_size == 0)
+    if (val_size == 0)
         return;
-    assert(src_size <= dst_size);
-    switch (src) {
-        .none => unreachable,
-        .imm => |imm| {
-            assert(src_size == 1);
-            switch (dst) {
-                .none => unreachable,
-                .imm => unreachable,
-                .reg => |reg| {
-                    assert(dst_size == 1);
+
+    assert(val_size <= ptr_size);
+    switch (ptr) {
+        .none => unreachable, // cannot write something to nothing
+        .imm => unreachable, // cannot write something to an immediate value. should be `zp` if anything.
+        .reg => |reg| {
+            // write the value to the register
+            switch (val) {
+                .none => {
+                    // write nothing to the register
+                },
+                .imm => |imm| {
+                    // write immediate value to the register
                     switch (reg) {
                         .a => try func.addInstImm(.lda_imm, imm),
                         .x => try func.addInstImm(.ldx_imm, imm),
                         .y => try func.addInstImm(.ldy_imm, imm),
                     }
                 },
-                .zp, .abs, .abs_unresolved => {
-                    assert(src_size == 1);
-                    try func.addInstImpl(.pha_impl);
-                    try func.addInstImm(.lda_imm, imm);
-                    try func.addInstMem("sta", dst, 0);
-                    try func.addInstImpl(.pla_impl);
+                .reg => {
+                    assert(val.reg == ptr.reg);
                 },
-            }
-        },
-        .reg => |src_reg| {
-            // there are no "size equals 1" asserts here because registers can contain values of types such as u128
-            // as long as the value itself fits in eight bits (e.g. @as(u128, 32))
-            switch (src_reg) {
-                .a => {
-                    switch (dst) {
-                        .none => unreachable,
-                        .imm => unreachable,
-                        .reg => |dst_reg| {
-                            switch (dst_reg) {
-                                .a => {},
-                                .x => try func.addInstImpl(.tax_impl),
-                                .y => try func.addInstImpl(.tay_impl),
-                            }
-                        },
-                        .zp, .abs, .abs_unresolved => try func.addInstMem("sta", dst, 0),
+                .zp => {
+                    // write zero page value to the register
+                    switch (reg) {
+                        .a => try func.addInstZp(.lda_zp, val),
+                        .x => try func.addInstZp(.ldx_zp, val),
+                        .y => try func.addInstZp(.ldy_zp, val),
                     }
                 },
-                .x => {
-                    switch (dst) {
-                        .none => unreachable,
-                        .imm => unreachable,
-                        .reg => |dst_reg| {
-                            switch (dst_reg) {
-                                .a => try func.addInstImpl(.txa_impl),
-                                .x => {},
-                                .y => {
-                                    try func.addInstImpl(.pha_impl);
-                                    try func.addInstImpl(.txa_impl);
-                                    try func.addInstImpl(.tay_impl);
-                                    try func.addInstImpl(.pla_impl);
-                                },
-                            }
-                        },
-                        .zp, .abs, .abs_unresolved => try func.addInstMem("stx", dst, 0),
-                    }
-                },
-                .y => {
-                    switch (dst) {
-                        .none => unreachable,
-                        .imm => unreachable,
-                        .reg => |dst_reg| {
-                            switch (dst_reg) {
-                                .a => try func.addInstImpl(.tya_impl),
-                                .x => {
-                                    try func.addInstImpl(.pha_impl);
-                                    try func.addInstImpl(.tya_impl);
-                                    try func.addInstImpl(.tax_impl);
-                                    try func.addInstImpl(.pla_impl);
-                                },
-                                .y => {},
-                            }
-                        },
-                        .zp, .abs, .abs_unresolved => try func.addInstMem("sty", dst, 0),
-                    }
-                },
+                .abs, .abs_unresolved => unreachable, // cannot write 2-byte address to 1-byte register
             }
         },
         .zp, .abs, .abs_unresolved => {
-            switch (dst) {
-                .none => unreachable,
-                .imm => unreachable,
+            // write the value to addressable memory
+            switch (val) {
+                .none => {
+                    // write nothing to addressable memory
+                },
+                .imm => |imm| {
+                    // write immediate value to addressable memory
+                    // TODO: make this A reg temporary saving thing into a function
+                    const reg_a = func.reg_a;
+                    func.reg_a = null;
+                    defer func.reg_a = reg_a;
+                    try func.addInstImpl(.pha_impl);
+                    try func.addInstImm(.lda_imm, imm);
+                    try func.addInstMem("sta", ptr);
+                    try func.addInstImpl(.pla_impl);
+                },
                 .reg => |reg| {
                     switch (reg) {
-                        .a => {
-                            assert(src_size == 1);
-                            assert(dst_size == 1);
-                            try func.addInstMem("lda", src, 0);
-                        },
-                        .x => {
-                            assert(src_size == 1);
-                            assert(dst_size == 1);
-                            try func.addInstMem("ldx", src, 0);
-                        },
-                        .y => {
-                            assert(src_size == 1);
-                            assert(dst_size == 1);
-                            try func.addInstMem("ldy", src, 0);
-                        },
+                        .a => try func.addInstMem("sta", ptr),
+                        .x => try func.addInstMem("stx", ptr),
+                        .y => try func.addInstMem("sty", ptr),
                     }
                 },
-                .zp, .abs, .abs_unresolved => {
-                    try func.addInstImpl(.pha_impl);
-                    // TODO: if ReleaseSmall, do this loop at runtime at a certain threshold
-                    var i: @TypeOf(src_size) = 0;
-                    while (i < src_size) : (i += 1) {
-                        try func.addInstMem("lda", src, @intCast(u16, i));
-                        try func.addInstMem("sta", dst, @intCast(u16, i));
-                    }
-                    try func.addInstImpl(.pla_impl);
+                .zp => |addr| {
+                    // write zero page address to addressable memory
+                    try func.addInstImm(.lda_imm, addr);
+                    try func.addInstMem("sta", ptr);
+                },
+                .abs, .abs_unresolved => {
+                    // write absolute address to addressable memory
+                    try func.addInstMem("lda", val);
+                    try func.addInstMem("sta", ptr);
+                    try func.addInstMem("lda", val.index(1));
+                    try func.addInstMem("sta", ptr.index(1));
                 },
             }
         },
@@ -1213,29 +1363,208 @@ fn store(func: *Func, ptr: MValue, val: MValue, ptr_ty: Type, val_ty: Type) !voi
 fn airLoad(func: *Func, inst: Air.Inst.Index) !void {
     const ty_op = func.air.instructions.items(.data)[inst].ty_op;
     const val_ty = func.air.getRefType(ty_op.ty);
-    _ = val_ty;
     const ptr = try func.resolveInst(ty_op.operand);
     const ptr_ty = func.air.typeOf(ty_op.operand);
-
-    const dst = try func.allocMem(ptr_ty);
-
-    try func.load(dst, ptr, ptr_ty);
+    assert(val_ty.eql(ptr_ty.childType(), func.getMod()));
+    const dst = try func.allocMem(ptr_ty.childType());
+    //const dst_ty = ptr_ty;
+    try func.trans(ptr, dst, ptr_ty.childType(), val_ty);
+    //try func.load(dst, ptr, ptr_ty);
+    //try func.trans(ptr,dst,ptr_ty,dst_ty);
     func.finishAir(inst, dst, &.{ty_op.operand});
 }
 
-fn load(func: *Func, dst: MValue, ptr: MValue, ptr_ty: Type) !void {
-    const child_ty = ptr_ty.childType();
-    log.debug("loading value of type {} from {} into {}...", .{ child_ty.tag(), ptr, dst });
-    const byte_size = func.getByteSize(child_ty).?;
-    switch (ptr) {
-        .zp, .abs, .abs_unresolved => {
-            var i: u16 = 0;
-            while (i < byte_size) : (i += 1) {
-                try func.addInstMem("lda", ptr, i);
-                try func.addInstMem("sta", dst, i);
+/// Transfers from source to destination.
+fn trans(func: *Func, src: MV, dst: MV, src_ty: Type, dst_ty: Type) !void {
+    //const child_src_ty = switch (src_ty.zigTypeTag()) {
+    //    .Pointer => switch (src) {
+    //        .none, .imm => unreachable,
+    //        .reg, .zp, .abs, .abs_unresolved => src_ty.childType(),
+    //    },
+    //    else => switch (src) {
+    //        .none, .imm => src_ty,
+    //        .reg, .zp, .abs, .abs_unresolved => unreachable,
+    //    },
+    //};
+    //const child_dst_ty = switch (dst_ty.zigTypeTag()) {
+    //    .Pointer => switch (dst) {
+    //        .none, .imm => unreachable,
+    //        .reg, .zp, .abs, .abs_unresolved => dst_ty.childType(),
+    //    },
+    //    else => switch (dst) {
+    //        .none, .imm => dst_ty,
+    //        .reg, .zp, .abs, .abs_unresolved => unreachable,
+    //    },
+    //};
+    const src_byte_size = func.getByteSize(src_ty).?; //child_src_ty).?;
+    const dst_byte_size = func.getByteSize(dst_ty).?; //child_dst_ty).?;
+    assert(src_byte_size <= dst_byte_size);
+    if (src_byte_size == 0)
+        return;
+    switch (src) {
+        .none => unreachable,
+        .imm => |src_imm| {
+            assert(src_byte_size == 1);
+            switch (dst) {
+                .none => unreachable,
+                .imm => unreachable,
+                .reg => |dst_reg| {
+                    assert(dst_byte_size == 1);
+                    switch (dst_reg) {
+                        .a => try func.addInstImm(.lda_imm, src_imm),
+                        .x => try func.addInstImm(.ldx_imm, src_imm),
+                        .y => try func.addInstImm(.ldy_imm, src_imm),
+                    }
+                },
+                .zp, .abs, .abs_unresolved => {
+                    // TODO: make this A reg temporary saving thing into a function
+                    assert(dst_byte_size == 1); // TODO: could be more
+                    const reg_a = func.reg_a;
+                    func.reg_a = null;
+                    defer func.reg_a = reg_a;
+                    try func.addInstImpl(.pha_impl);
+                    try func.addInstImm(.lda_imm, src_imm);
+                    try func.addInstMem("sta", dst);
+                    try func.addInstImpl(.pla_impl);
+                },
             }
         },
-        else => panic("TODO: handle {}", .{ptr}),
+        .reg => |src_reg| {
+            assert(src_byte_size == 1);
+            switch (dst) {
+                .none => unreachable,
+                .imm => unreachable,
+                .reg => |dst_reg| {
+                    assert(dst_byte_size == 1);
+                    switch (src_reg) {
+                        .a => {
+                            switch (dst_reg) {
+                                .a => {},
+                                .x => try func.addInstImpl(.tax_impl),
+                                .y => try func.addInstImpl(.tay_impl),
+                            }
+                        },
+                        else => panic("TODO: handle {}", .{src_reg}),
+                    }
+                },
+                .zp, .abs, .abs_unresolved => {
+                    assert(dst_byte_size == 1); // TODO: could be more
+                    switch (src_reg) {
+                        .a => try func.addInstMem("sta", dst),
+                        .x => try func.addInstMem("stx", dst),
+                        else => panic("TODO: handle {}", .{src_reg}),
+                    }
+                },
+            }
+        },
+        .zp, .abs, .abs_unresolved => {
+            switch (dst) {
+                .none => unreachable,
+                .imm => unreachable,
+                .reg => |reg| {
+                    assert(dst_byte_size == 1);
+                    switch (reg) {
+                        .a => try func.addInstMem("lda", src),
+                        .x => try func.addInstMem("ldx", src),
+                        .y => try func.addInstMem("ldy", src),
+                    }
+                },
+                .zp, .abs, .abs_unresolved => {
+                    // TODO: make this A reg temporary saving thing into a function
+                    const reg_a = func.reg_a;
+                    func.reg_a = null;
+                    defer func.reg_a = reg_a;
+                    try func.addInstImpl(.pha_impl);
+                    var i: u16 = 0;
+                    while (i < src_byte_size) : (i += 1) {
+                        try func.addInstMem("lda", src.index(i));
+                        try func.addInstMem("sta", dst.index(i));
+                    }
+                    try func.addInstImpl(.pla_impl);
+                },
+            }
+        },
+        //else => panic("TODO: handle {}", .{src}),
+    }
+}
+
+/// Loads into the destination the value that the pointer points at.
+/// This means we read the value from the pointer and write it to the destination.
+/// Preserves all registers not specified in the operation.
+/// Asserts destination size is >= size of pointer type.
+/// The parameter order intentionally resembles the LD* instructions.
+fn load(func: *Func, dst: MV, ptr: MV, ptr_ty: Type) !void {
+    const child_ptr_ty = ptr_ty.childType();
+    log.debug("loading value of type {} from {} into {}...", .{ child_ptr_ty.tag(), ptr, dst });
+    const byte_size = func.getByteSize(child_ptr_ty).?;
+    switch (ptr) {
+        .none => {
+            // write nothing to the destination
+        },
+        .imm => |imm| {
+            // load the immediate value to the destination
+            assert(byte_size == 1);
+            switch (dst) {
+                .none => unreachable, // cannot write register value to nothing
+                .imm => unreachable, // cannot write immediate value to immediate value. should be `zp` if anything.
+                .reg => |reg| {
+                    switch (reg) {
+                        .a => try func.addInstImm(.lda_imm, imm),
+                        .x => try func.addInstImm(.ldx_imm, imm),
+                        .y => try func.addInstImm(.ldy_imm, imm),
+                    }
+                },
+                .zp, .abs, .abs_unresolved => {
+                    // TODO: make this A reg temporary saving thing into a function
+                    const reg_a = func.reg_a;
+                    func.reg_a = null;
+                    defer func.reg_a = reg_a;
+                    try func.addInstImpl(.pha_impl);
+                    try func.addInstImm(.lda_imm, imm);
+                    try func.addInstMem("sta", dst);
+                    try func.addInstImpl(.pla_impl);
+                },
+            }
+        },
+        .reg => {
+            // load the register's value to the destination
+            switch (dst) {
+                .none => unreachable, // cannot write register value to nothing
+                .imm => unreachable, // cannot write register value to immediate value. should be `zp` if anything.
+                .reg => {
+                    assert(ptr.reg == dst.reg);
+                },
+                else => panic("TODO: handle {}", .{dst}),
+            }
+        },
+        .zp, .abs, .abs_unresolved => {
+            // load the value from the address to the destination
+            switch (dst) {
+                .none => unreachable,
+                .imm => unreachable,
+                .reg => |reg| {
+                    switch (reg) {
+                        .a => try func.addInstMem("lda", ptr),
+                        .x => try func.addInstMem("ldx", ptr),
+                        .y => try func.addInstMem("ldy", ptr),
+                    }
+                },
+                .zp, .abs, .abs_unresolved => {
+                    // TODO: if ReleaseSmall, do this loop at runtime at a certain threshold
+                    // TODO: make this A reg temporary saving thing into a function
+                    const reg_a = func.reg_a;
+                    func.reg_a = null;
+                    defer func.reg_a = reg_a;
+                    try func.addInstImpl(.pha_impl);
+                    var i: u16 = 0;
+                    while (i < byte_size) : (i += 1) {
+                        try func.addInstMem("lda", ptr.index(i));
+                        try func.addInstMem("sta", dst.index(i));
+                    }
+                    try func.addInstImpl(.pla_impl);
+                },
+            }
+        },
     }
 }
 
@@ -1249,21 +1578,25 @@ fn airIntCast(func: *Func, inst: Air.Inst.Index) !void {
     const target = func.getTarget();
     const operand_info = operand_ty.intInfo(target);
     const dst_info = dst_ty.intInfo(target);
-    const res: MValue = res: {
+    const res: MV = res: {
         if (operand_info.bits == dst_info.bits) {
             break :res operand;
         }
 
-        const res = try func.allocMem(dst_ty);
-        try func.store(
-            res,
-            operand,
-            dst_ty,
-            // note: not operand_ty.
-            // this AIR instruction guarantees that the same integer value fits in both types.
-            dst_ty,
-        );
-        break :res res;
+        const operand_size = func.getByteSize(operand_ty).?;
+        const dst_byte_size = func.getByteSize(dst_ty).?;
+
+        if (operand_size == 1 and dst_byte_size == 2) {
+            // TODO: func.memory.realloc if possible so that we can reuse the existing allocation and just add a zero byte?
+            const res = try func.allocMem(Type.usize);
+            try func.trans(operand, res.index(0), Type.u8, Type.u8);
+            try func.trans(.{ .imm = 0 }, res.index(1), Type.u8, Type.u8);
+            //try func.load(res.index(0), operand, Type.u8);
+            //try func.load(res.index(1), .{ .imm = 0 }, Type.u8);
+            break :res res;
+        } else {
+            @panic("TODO");
+        }
     };
 
     return func.finishAir(inst, res, &.{ty_op.operand});
@@ -1298,7 +1631,7 @@ fn airStructFieldPtrIndex(func: *Func, inst: Air.Inst.Index, index: u32) !void {
     return func.finishAir(inst, result, &.{ty_op.operand});
 }
 
-fn structFieldPtr(func: *Func, inst: Air.Inst.Index, operand: Air.Inst.Ref, index: u32) !MValue {
+fn structFieldPtr(func: *Func, inst: Air.Inst.Index, operand: Air.Inst.Ref, index: u32) !MV {
     _ = inst;
 
     const mv = try func.resolveInst(operand);
@@ -1336,6 +1669,154 @@ fn airStructFieldVal(func: *Func, inst: Air.Inst.Index) !void {
     return func.finishAir(inst, result, &.{extra.struct_operand});
 }
 
+fn airArrayElemVal(func: *Func, inst: Air.Inst.Index) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    const array = try func.resolveInst(bin_op.lhs);
+    const array_ty = func.air.typeOf(bin_op.lhs);
+
+    const child_ty = array_ty.childType();
+    const child_byte_size = func.getByteSize(child_ty).?;
+
+    const index = try func.resolveInst(bin_op.rhs);
+    const index_ty = func.air.typeOf(bin_op.rhs);
+    _ = index_ty;
+
+    log.debug("array: {}, index: {}", .{ array, index });
+
+    const res: MV = res: {
+        switch (array) {
+            .none => unreachable,
+            .imm => panic("TODO: handle {}", .{array}),
+            .reg => panic("TODO: handle {}", .{array}),
+            .zp => panic("TODO: handle {}", .{array}),
+            .abs, .abs_unresolved => {
+                // this assembly shows indexing of an array in absolute memory using a byte:
+                // ```
+                // ; our array (assume this will be in absolute memory)
+                // hello: .byte 'H', 'E', 'L', 'L', 'O'
+                //
+                // main:
+                //     ldx #1 ; the index
+                //     lda hello, x
+                //     ; now A contains 'E'
+                //     rts
+                // ```
+                break :res switch (index) {
+                    .none => unreachable,
+                    .imm => |imm| {
+                        try func.addInstMem("lda", array.index(imm * child_byte_size));
+                        break :res .{ .reg = .a };
+                    },
+                    .reg => |reg| switch (reg) {
+                        .a => {
+                            assert(child_byte_size == 1); // TODO (runtime mul)
+                            try func.addInstImpl(.tax_impl);
+                            try func.addInstMem("lda_x", array);
+                            break :res .{ .reg = .a };
+                        },
+                        .x => unreachable, // TODO
+                        .y => unreachable, // TODO
+                    },
+                    .zp => |addr| {
+                        assert(child_byte_size == 1); // TODO (runtime mul)
+                        try func.addInstZp(.ldx_zp, .{ .zp = addr });
+                        try func.addInstMem("lda_x", array);
+                        break :res .{ .reg = .a };
+                    },
+                    .abs, .abs_unresolved => {
+                        // this assembly shows array indexing using a word:
+                        // ```
+                        // ; our array
+                        // hello: .byte 'H', 'E', 'L', 'L', 'O'
+                        // ; our index (1)
+                        // index: .byte 1, 0
+                        //
+                        // main:
+                        //     clc ; carry flag might be set
+                        //     cld ; decimal flag might be set
+                        //     ; get the two-byte address somewhere into the zero page
+                        //     ; lo byte
+                        //     lda index + 0
+                        //     adc #<hello ; add `hello` lo byte
+                        //     sta $00
+                        //     ; hi byte
+                        //     lda index + 1
+                        //     adc #>hello ; add `hello` hi byte
+                        //     sta $01
+                        //
+                        //     ; now dereference the pointer and get the byte
+                        //     ldx #0       ; alternatively: ldy #0
+                        //     lda ($00, x) ;                lda ($00), y
+                        //     ; now A contains 'E'
+                        //     rts
+                        // ```
+                        assert(child_byte_size == 1); // TODO (runtime mul)
+                        @panic("TODO");
+                    },
+                };
+            },
+        }
+    };
+
+    log.debug("leaving airArrayElemVal with {} res", .{res});
+
+    return func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+/// Emits code to read an element value from a pointer using an index.
+fn airPtrElemVal(func: *Func, inst: Air.Inst.Index) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    const ptr = bin_op.lhs;
+    const index = bin_op.rhs;
+    const ptr_ty = func.air.typeOf(ptr);
+    const res: MV = res: {
+        break :res try func.ptrElemVal(ptr, index, ptr_ty, inst);
+    };
+    return func.finishAir(inst, res, &.{ ptr, index });
+}
+
+/// Emits code to create a new pointer from a pointer and an index.
+fn airPtrElemPtr(func: *Func, inst: Air.Inst.Index) !void {
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const extra = func.air.extraData(Air.Bin, ty_pl.payload).data;
+    const ptr = extra.lhs;
+    const index = extra.rhs;
+    const ptr_ty = func.air.typeOf(ptr);
+    const new_ptr = try func.ptrElemPtr(ptr, index, ptr_ty, inst);
+    return func.finishAir(inst, new_ptr, &.{ ptr, index });
+}
+
+/// Indexes into a pointer and returns that pointer.
+fn ptrElemPtr(
+    func: *Func,
+    ptr: Air.Inst.Ref,
+    index: Air.Inst.Ref,
+    ptr_ty: Type,
+    inst: Air.Inst.Index,
+) !MV {
+    const ptr_mv = try func.resolveInst(ptr);
+    const index_mv = try func.resolveInst(index);
+    const new_ptr = try func.binOp(.ptr_add, ptr_mv, index_mv, ptr_ty, Type.usize, null, inst);
+    return new_ptr;
+}
+
+fn ptrElemVal(
+    func: *Func,
+    ptr: Air.Inst.Ref,
+    index: Air.Inst.Ref,
+    ptr_ty: Type,
+    inst: Air.Inst.Index,
+) !MV {
+    const ptr_mv = try func.resolveInst(ptr);
+    const index_mv = try func.resolveInst(index);
+    const addr = try func.binOp(.ptr_add, ptr_mv, index_mv, ptr_ty, Type.usize, null, inst);
+    const child_ty = ptr_ty.childType();
+    const dst = try func.allocMem(child_ty);
+    try func.trans(addr, dst, ptr_ty.childType(), child_ty);
+    //try func.load(dst, addr, ptr_ty);
+    return dst;
+}
+
 fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
     // this is only a change at the type system level
     const ty_op = func.air.instructions.items(.data)[inst].ty_op;
@@ -1367,8 +1848,8 @@ fn airRet(func: *Func, inst: Air.Inst.Index) !void {
     const un_op = func.air.instructions.items(.data)[inst].un_op;
     const val = try func.resolveInst(un_op);
     const ret_ty = func.getType().fnReturnType();
-    const val_ty = ret_ty;
-    try func.store(func.ret_mv, val, ret_ty, val_ty);
+    //try func.store(val, func.ret_val, val_ty, ret_ty);
+    try func.trans(val, func.ret_val, ret_ty, ret_ty);
     try func.addInstImpl(.rts_impl);
     func.finishAir(inst, .none, &.{un_op});
 }
@@ -1378,11 +1859,10 @@ fn airRetLoad(func: *Func, inst: Air.Inst.Index) !void {
     const ptr = try func.resolveInst(un_op);
     const ptr_ty = func.air.typeOf(un_op);
     const ret_ty = func.getType().fnReturnType();
-    const byte_size = func.getByteSize(ret_ty).?;
-    const dst = try func.memory.alloc(byte_size);
+    const dst = try func.allocMem(ptr_ty.childType());
     try func.load(dst, ptr, ptr_ty);
     const val = dst;
-    try func.store(func.ret_mv, val, ptr_ty, ret_ty);
+    try func.load(func.ret_val, val, ret_ty);
     try func.addInstImpl(.rts_impl);
     return func.finishAir(inst, .none, &.{un_op});
 }
@@ -1401,7 +1881,8 @@ fn airLoop(func: *Func, inst: Air.Inst.Index) !void {
 
     log.debug("before: {}, after: {}, now: {}", .{ size_before, size_after, size });
 
-    try func.addInst(.jmp_abs, .{ .abs = .{ .current = .{
+    // TODO: maybe rename addInstInternal to addInstDirect or something and still allow access
+    try func.addInstInternal(.jmp_abs, .{ .abs = .{ .current = .{
         .decl_index = func.getDeclIndex(),
         .offset = size,
     } } });
@@ -1411,7 +1892,7 @@ fn airLoop(func: *Func, inst: Air.Inst.Index) !void {
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {
     // examples of the behavior of BRK:
     // * on the C64 it clears the screen and resets.
-    // * on the C128 it prints "BREAK" followed by the content of
+    // * on the C128 it prints "BREAK" followed by the values of
     //   PC (Program Counter), SR (Status Register),
     //   AC (ACcumulator), XR (X Register), YR (Y Register),
     //   and SP (Stack Pointer)
@@ -1475,10 +1956,11 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
     var call_values = try func.resolveCallingConventionValues(fn_ty);
     defer call_values.deinit(func.gpa);
 
-    for (call_values.args) |expected, i| {
-        const actual = try func.resolveInst(args[i]);
+    for (call_values.args) |dst, i| {
+        const src = try func.resolveInst(args[i]);
         const arg_ty = func.air.typeOf(args[i]);
-        try func.store(expected, actual, arg_ty, arg_ty);
+        try func.trans(src, dst, arg_ty, arg_ty);
+        //try func.load(dst, src, arg_ty);
     }
 
     if (func.air.value(callee)) |fn_val| {
@@ -1486,14 +1968,16 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
             log.debug("calling {s}...", .{func.getMod().declPtr(fn_pl.data.owner_decl).name});
             if (func.bin_file.cast(link.File.Prg)) |prg| {
                 const blk_i = try prg.recordDecl(fn_pl.data.owner_decl);
-                try func.addInst(.jsr_abs, .{ .abs = .{ .unresolved = .{ .blk_i = blk_i } } });
+                // TODO: maybe rename addInstInternal to addInstDirect or something and still allow access
+                try func.addInstInternal(.jsr_abs, .{ .abs = .{ .unresolved = .{ .blk_i = blk_i } } });
             } else unreachable;
         } else if (fn_val.castTag(.extern_fn)) |_| {
-            return func.fail("extern functions are not supported", .{});
+            return func.fail("extern functions not supported", .{});
         } else if (fn_val.castTag(.decl_ref)) |_| {
             return func.fail("TODO implement calling bitcasted functions", .{});
         } else if (fn_val.castTag(.int_u64)) |int| {
-            try func.addInst(.jsr_abs, .{ .abs = .{ .imm = @intCast(u16, int.data) } });
+            // TODO: maybe rename addInstInternal to addInstDirect or something and still allow access
+            try func.addInstInternal(.jsr_abs, .{ .abs = .{ .imm = @intCast(u16, int.data) } });
         } else unreachable;
     } else {
         assert(callee_ty.zigTypeTag() == .Pointer);
@@ -1521,7 +2005,7 @@ fn airCondBr(func: *Func, inst: Air.Inst.Index) !void {
     const liveness_condbr = func.liveness.getCondBr(inst);
     _ = liveness_condbr;
 
-    // this assembly showcases conditional execution:
+    // this assembly shows conditional execution:
     // ```
     // lda #5
     // cmp #5 ; does A equal 5? (yes)
@@ -1531,6 +2015,7 @@ fn airCondBr(func: *Func, inst: Air.Inst.Index) !void {
     // then:
     //   lda #0
     // else:
+    //   rts
     // ```
 
     switch (cond) {
@@ -1564,7 +2049,7 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
     assert(extra.data.clobbers_len() == 0);
 
     const dies = !extra.data.is_volatile() and func.liveness.isUnused(inst);
-    const result: MValue = if (dies)
+    const result: MV = if (dies)
         .none
     else result: {
         for (inputs) |input| {
@@ -1577,25 +2062,26 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
             extra_i += (constraint.len + name.len + (2 + 3)) / 4;
 
             if (constraint.len < 3 or constraint[0] != '{' or constraint[constraint.len - 1] != '}') {
-                return func.fail("unrecognized `asm` input constraint: \"{s}\"", .{constraint});
+                return func.fail("unknown `asm` input constraint: \"{s}\"", .{constraint});
             }
             const reg_name = constraint[1 .. constraint.len - 1];
-            const reg = parseRegName(reg_name) orelse {
-                return func.fail("unrecognized register \"{s}\"", .{reg_name});
+            const reg = Register.parse(reg_name) orelse {
+                return func.fail("unknown register \"{s}\"", .{reg_name});
             };
-
-            const input_mv = try func.resolveInst(input);
-            try func.register_manager.getReg(reg, null);
+            const input_val = try func.resolveInst(input);
+            // TODO: support bit sizes <= 8 and support `comptime_int`s?
             const ty = func.air.typeOf(input);
-            // TODO: make this work with comptime_ints?
             if (func.getByteSize(ty).? != 1)
                 return func.fail("unable to load non-8-bit-sized into {c} register", .{std.ascii.toUpper(reg_name[0])});
-            try func.store(.{ .reg = reg }, input_mv, ty, ty);
+            const reg_a = try func.freeReg(reg, inst);
+            try func.trans(input_val, reg_a, ty, Type.u8);
+            //try func.load(func.freeReg(reg, inst), input_mv, ty);
         }
 
         const asm_source = mem.sliceAsBytes(func.air.extra[extra_i..])[0..extra.data.source_len];
         log.debug("asm_source.len: {}", .{asm_source.len});
-        log.debug("asm source:\n```\n{s}\n```", .{asm_source});
+        if (asm_source.len != 0)
+            log.debug("asm source:\n```\n{s}\n```", .{asm_source});
         if (mem.eql(u8, asm_source, "rts")) {
             try func.addInstImpl(.rts_impl);
         } else if (mem.eql(u8, asm_source, "nop")) {
@@ -1622,7 +2108,7 @@ fn airUnreach(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, .none, &.{});
 }
 
-fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MValue {
+fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
     var val = const_val;
     if (val.castTag(.runtime_value)) |sub_value| {
         val = sub_value.data;
@@ -1641,22 +2127,22 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MValue {
     // if it does not fit, fall through and let the other logic handle it.
     const target = func.getTarget();
     switch (ty.zigTypeTag()) {
-        .Void => return MValue{ .none = {} },
+        .Void => return MV{ .none = {} },
         .Int => {
             const int_info = ty.intInfo(target);
             if (int_info.bits <= 8) {
                 switch (int_info.signedness) {
-                    .signed => return MValue{ .imm = @bitCast(u8, @intCast(i8, val.toSignedInt(target))) },
-                    .unsigned => return MValue{ .imm = @intCast(u8, val.toUnsignedInt(target)) },
+                    .signed => return MV{ .imm = @bitCast(u8, @intCast(i8, val.toSignedInt(target))) },
+                    .unsigned => return MV{ .imm = @intCast(u8, val.toUnsignedInt(target)) },
                 }
             }
         },
-        .Bool => return MValue{ .imm = @boolToInt(val.toBool()) },
+        .Bool => return MV{ .imm = @boolToInt(val.toBool()) },
         .Pointer => switch (ty.ptrSize()) {
             .Slice => {},
             else => switch (val.tag()) {
                 .int_u64, .one, .zero, .null_value => {
-                    return MValue{ .abs = @intCast(u16, val.toUnsignedInt(target)) };
+                    return MV{ .abs = @intCast(u16, val.toUnsignedInt(target)) };
                 },
                 else => {},
             },
@@ -1675,7 +2161,7 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MValue {
         .Type => unreachable,
         .EnumLiteral => unreachable,
         .NoReturn => unreachable,
-        .Undefined => unreachable, // TODO: MValue.undef?
+        .Undefined => unreachable, // TODO: MV.undef?
         .Null => unreachable,
         .Opaque => unreachable,
 
@@ -1692,7 +2178,7 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MValue {
     return try func.lowerUnnamedConst(val, ty);
 }
 
-fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MValue {
+fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MV {
     log.debug("lowerUnnamedConst: ty = {}, val = {}", .{ val.fmtValue(ty, func.getMod()), ty.fmt(func.getMod()) });
     const blk_i = @intCast(
         u16,
@@ -1701,11 +2187,11 @@ fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MValue {
         },
     );
     if (func.bin_file.cast(link.File.Prg)) |_| {
-        return MValue{ .abs_unresolved = .{ .blk_i = blk_i } };
+        return MV{ .abs_unresolved = .{ .blk_i = blk_i } };
     } else unreachable;
 }
 
-fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Decl.Index) !MValue {
+fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Decl.Index) !MV {
     _ = ty;
     _ = val;
 
@@ -1715,13 +2201,14 @@ fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Decl.Index) !MVal
 
     if (func.bin_file.cast(link.File.Prg)) |prg| {
         const blk_i = try prg.recordDecl(decl_index);
-        return MValue{ .abs_unresolved = .{ .blk_i = blk_i } };
+        return MV{ .abs_unresolved = .{ .blk_i = blk_i } };
     } else unreachable;
 }
 
-fn lowerParentPtr(func: *Func, ptr_val: Value, ptr_child_ty: Type) !MValue {
+fn lowerParentPtr(func: *Func, ptr_val: Value, ptr_child_ty: Type) !MV {
     switch (ptr_val.tag()) {
         .elem_ptr => {
+            // TODO: ptrElemPtr?
             const elem_ptr = ptr_val.castTag(.elem_ptr).?.data;
             const index = elem_ptr.index;
             const offset = index * ptr_child_ty.abiSize(func.getTarget());
@@ -1751,7 +2238,7 @@ const BigTomb = struct {
         processDeath(big_tomb.func, op_ref);
     }
 
-    fn finishAir(big_tomb: *BigTomb, result: MValue) void {
+    fn finishAir(big_tomb: *BigTomb, result: MV) void {
         if (result != .none) {
             big_tomb.func.currentBranch().values.putAssumeCapacityNoClobber(Air.indexToRef(big_tomb.inst), result);
         }
@@ -1776,17 +2263,18 @@ fn processDeath(func: *Func, ref: Air.Inst.Ref) void {
     if (func.air.instructions.items(.tag)[inst] == .constant) return; // constants do not die
     log.debug("processing death of {}", .{func.air.instructions.items(.tag)[inst]});
     const value = func.getResolvedInstValue(ref);
-    log.warn("and this is not a constant! it is {!}!", .{value}); // TODO
     switch (value) {
         .zp, .abs => func.memory.free(value, func.air.typeOfIndex(inst)),
-        .reg => |reg| {
-            func.register_manager.freeReg(reg);
+        .reg => |reg| switch (reg) {
+            .a => func.reg_a = null,
+            .x => func.reg_x = null,
+            .y => func.reg_y = null,
         },
         else => unreachable,
     }
 }
 
-fn finishAir(func: *Func, inst: Air.Inst.Index, result: MValue, operands: []const Air.Inst.Ref) void {
+fn finishAir(func: *Func, inst: Air.Inst.Index, result: MV, operands: []const Air.Inst.Ref) void {
     assert(operands.len <= Liveness.bpi - 1);
     var tomb_bits = func.liveness.getTombBits(inst);
     for (operands) |operand| {
@@ -1804,7 +2292,7 @@ fn finishAir(func: *Func, inst: Air.Inst.Index, result: MValue, operands: []cons
     }
 }
 
-fn resolveInst(func: *Func, ref: Air.Inst.Ref) !MValue {
+fn resolveInst(func: *Func, ref: Air.Inst.Ref) !MV {
     log.debug("resolving instruction {} of type {}...", .{ ref, func.air.typeOf(ref).tag() });
 
     // does the instruction refer to a value in one of our local branches?
@@ -1836,7 +2324,7 @@ fn resolveInst(func: *Func, ref: Air.Inst.Ref) !MValue {
     log.debug("resolveInst: const ty: {}", .{ty.tag()});
 
     // if (!ty.hasRuntimeBits())
-    //     return MValue{ .none = {} };
+    //     return MV{ .none = {} };
 
     const val = func.air.value(ref).?;
     log.debug("lowering constant of type {} with tag {}...", .{ ty.tag(), ty.zigTypeTag() });
@@ -1844,7 +2332,7 @@ fn resolveInst(func: *Func, ref: Air.Inst.Ref) !MValue {
     return func.lowerConstant(val, ty);
 }
 
-fn getResolvedInstValue(func: *Func, inst: Air.Inst.Ref) MValue {
+fn getResolvedInstValue(func: *Func, inst: Air.Inst.Ref) MV {
     var i: usize = func.branches.items.len - 1;
     while (true) : (i -= 1) {
         if (func.branches.items[i].values.get(inst)) |mv| {
@@ -1854,55 +2342,84 @@ fn getResolvedInstValue(func: *Func, inst: Air.Inst.Ref) MValue {
     }
 }
 
-/// Spills the given register to non-register memory.
-pub fn spillInstruction(func: *Func, reg: Register, inst: Air.Inst.Index) !void {
-    const reg_mv = func.getResolvedInstValue(Air.indexToRef(inst));
-    assert(reg == reg_mv.reg);
-    // TODO: use PHA and PLA here if reg == .a?
-    //       how do we best associate the PLA with the inst and emit it when the inst dies?
-    const branch = &func.branches.items[func.branches.items.len - 1];
-    const mem_mv = try func.memory.alloc(1);
-    try branch.values.put(func.gpa, Air.indexToRef(inst), mem_mv);
-    try func.store(mem_mv, reg_mv, Type.u8, Type.u8);
-}
-fn parseRegName(name: []const u8) ?Register {
-    if (@hasDecl(Register, "parseRegName")) {
-        return Register.parseRegName(name);
-    }
-    return std.meta.stringToEnum(Register, name);
-}
-
 /// Adds an MIR instruction to the output.
 /// See `Mir.Inst.checkCombo` for an explanation on why `data` is `anytype`.
-fn addInst(func: *Func, tag: Mir.Inst.Tag, data: anytype) error{OutOfMemory}!void {
+/// This function is the only point that adds instructions to the MIR output.
+/// It has safety that ensures the following:
+/// * It is impossible to generate invalid instructions.
+/// * It is impossible to clobber registers unintentionally.
+fn addInstInternal(func: *Func, tag: Mir.Inst.Tag, data: anytype) error{OutOfMemory}!void {
+    // TODO: if we migrate to no longer using `addInst` but only the other specific `addInst` variants,
+    //       we no longer need this safety
     // TODO: try doing this at comptime by making `tag` and `data` comptime
     //       (as of writing, making `data` into comptime crashes the compiler)
-    if (debug.runtime_safety)
+    const inst = Mir.Inst{ .tag = tag, .data = @as(Mir.Inst.Data, data) };
+    // technically we could also do this check manually in each addInst* variant
+    // but it is more central this way
+    if (debug.runtime_safety) {
+        // prevent generating invalid instructions
         Mir.Inst.checkCombo(tag, data);
-    try func.mir_instructions.append(func.gpa, .{ .tag = tag, .data = @as(Mir.Inst.Data, data) });
+
+        // prevent clobbering registers unintentionally
+        if (inst.tag.getAffectedRegister()) |affected_reg| {
+            switch (affected_reg) {
+                .a => if (func.reg_a != null) assert(func.reg_a == func.current_inst),
+                .x => if (func.reg_x != null) assert(func.reg_x == func.current_inst),
+                .y => if (func.reg_y != null) assert(func.reg_y == func.current_inst),
+            }
+        }
+    }
+    try func.mir_instructions.append(func.gpa, inst);
     log.debug("added instruction .{{ .tag = {}, .data = {} }}", .{ tag, data });
 }
 fn addInstImpl(func: *Func, tag: Mir.Inst.Tag) !void {
-    try func.addInst(tag, .{ .none = {} });
+    try func.addInstInternal(tag, .{ .none = {} });
 }
 fn addInstImm(func: *Func, tag: Mir.Inst.Tag, value: u8) !void {
-    try func.addInst(tag, .{ .imm = value });
+    try func.addInstInternal(tag, .{ .imm = value });
 }
-/// Adds an MIR instruction to the output that operates on memory.
-///
+/// Adds an MIR instruction to the output that operates on zero page.
+/// Use this over `addInstMem` if you do not expect absolute memory to be used.
+/// Use MV.index() to get an index into the value.
+fn addInstZp(func: *Func, tag: Mir.Inst.Tag, mv: MV) !void {
+    try func.addInstInternal(tag, .{ .zp = mv.zp });
+}
+/// Adds an MIR instruction to the output that operates on absolute memory.
+/// Use this over `addInstMem` if you do not expect the zero page to be used.
+/// Use MV.index() to get an index into the value.
+fn addInstAbs(func: *Func, tag: Mir.Inst.Tag, val: MV) !void {
+    switch (val) {
+        .abs => |addr| try func.addInstInternal(
+            tag,
+            .{ .abs = .{ .imm = addr } },
+        ),
+        .abs_unresolved => |unresolved| try func.addInstInternal(
+            tag,
+            .{ .abs = .{ .unresolved = .{ .blk_i = unresolved.blk_i, .offset = unresolved.offset } } },
+        ),
+        else => unreachable,
+    }
+}
+/// Adds an MIR instruction to the output that operates on addressable memory.
 /// Whenever you see an opcode mnemonic in double quotes, you can expect it to be used with multiple possible addressing modes.
-fn addInstMem(func: *Func, comptime mnemonic: []const u8, mv: MValue, offset: u16) !void {
-    switch (mv.index(offset)) {
-        .zp => |addr| try func.addInst(
+///
+/// Use MV.index() to get an index into the value.
+///
+/// Use `addInstAbs` instead if you do not expect the zero page to be used.
+/// Use `addInstZp` instead if you do not expect absolute memory to be used.
+fn addInstMem(func: *Func, comptime mnemonic: []const u8, val: MV) !void {
+    // TODO: once we hit possible 100 instructions in Mir.Inst.Tag, stringToEnum will stop working.
+    switch (val) {
+        .zp => |addr| try func.addInstInternal(
             std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_zp").?,
             .{ .zp = addr },
         ),
-        .abs => |addr| try func.addInst(
+        .abs => |addr| try func.addInstInternal(
             std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_abs").?,
             .{ .abs = .{ .imm = addr } },
         ),
         .abs_unresolved => |unresolved| {
-            try func.addInst(
+            try func.addInstInternal(
                 std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_abs").?,
                 .{ .abs = .{ .unresolved = .{ .blk_i = unresolved.blk_i, .offset = unresolved.offset } } },
             );
@@ -1911,25 +2428,23 @@ fn addInstMem(func: *Func, comptime mnemonic: []const u8, mv: MValue, offset: u1
     }
 }
 /// Adds an MIR instruction to the output that operates using the appropriate addressing mode based on the given value.
-/// The given offset is used only if an absolute memory or zero page memory addressing mode is used.
-///
 /// Whenever you see an opcode mnemonic in double quotes, you can expect it to be used with multiple possible addressing modes.
-fn addInstAny(func: *Func, comptime mnemonic: []const u8, mv: MValue, offset: u16) !void {
-    switch (mv.index(offset)) {
-        .none => {
-            try func.addInstImpl(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_impl").?);
-        },
-        .imm => |imm| {
-            try func.addInstImm(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_imm").?, imm);
-        },
+///
+/// Use MV.index() to get an index into the value.
+///
+/// Use a more specific addInst* function if possible.
+fn addInstAny(func: *Func, comptime mnemonic: []const u8, val: MV) !void {
+    switch (val) {
+        .none => try func.addInstImpl(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_impl").?),
+        .imm => |imm| try func.addInstImm(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_imm").?, imm),
         .reg => {
-            const temp = func.memory.zp_free.pop();
-            defer func.memory.zp_free.appendAssumeCapacity(temp);
-            const ptr = .{ .zp = temp };
-            try func.store(ptr, mv, Type.u8, Type.u8);
-            try func.addInstAny(mnemonic, ptr, 0);
+            const temp = func.memory.allocZeroPageMemory(1).?; // TODO: handle error
+            defer func.memory.free(temp, Type.u8);
+            //try func.load(temp, val, Type.u8);
+            try func.trans(val, temp, Type.u8, Type.u8);
+            try func.addInstAny(mnemonic, temp);
         },
-        .zp, .abs, .abs_unresolved => try func.addInstMem(mnemonic, mv, offset),
+        .zp, .abs, .abs_unresolved => try func.addInstMem(mnemonic, val),
     }
 }
 

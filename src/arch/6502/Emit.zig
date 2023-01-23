@@ -5,7 +5,7 @@
 const std = @import("std");
 const math = std.math;
 const mem = std.mem;
-const log = std.log;
+const log = std.log.scoped(.emit);
 const debug = std.debug;
 const assert = debug.assert;
 const Mir = @import("Mir.zig");
@@ -61,7 +61,7 @@ fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsoluteAddress) !void {
             const addr = if (emit.bin_file.cast(link.File.Prg)) |prg| addr: {
                 var it = prg.blocks.iterator();
                 while (it.next()) |entry| {
-                    std.log.debug("block(Emit.zig): {} -> {}", .{ entry.key_ptr.*, entry.value_ptr.* });
+                    std.log.debug("block: {} -> {}", .{ entry.key_ptr.*, entry.value_ptr.* });
                 }
                 const load_address = prg.getLoadAddress();
                 var program_size = emit.getProgramSize()

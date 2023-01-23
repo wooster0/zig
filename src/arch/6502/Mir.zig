@@ -9,12 +9,14 @@ const debug = std.debug;
 const assert = debug.assert;
 const testing = std.testing;
 const bits = @import("bits.zig");
+const Register = bits.Register;
 
 const Mir = @This();
 
 instructions: std.MultiArrayList(Inst).Slice,
 //extra: []const u32,
 
+/// An opcode and an operand with an addressing mode.
 pub const Inst = struct {
     // Design decision note:
     // We could have not used an additional `Data` field and gone with a single `Tag` field:
@@ -35,7 +37,7 @@ pub const Inst = struct {
     // This is all possible thanks to `std.MultiArrayList`.
     /// The instruction's opcode.
     tag: Tag,
-    /// The instruction's addressing mode.
+    /// The instruction's operand with an addressing mode.
     data: Data,
 
     /// The position of an MIR instruction within the `Mir` instructions array.
@@ -144,6 +146,52 @@ pub const Inst = struct {
             } else {
                 return two;
             }
+        }
+
+        /// Returns the register that could be affected by the execution of this opcode,
+        /// excluding the status register.
+        /// "Could" because a register's value might stay the same after execution of this opcode.
+        pub fn getAffectedRegister(tag: Tag) ?Register {
+            return switch (tag) {
+                .brk_impl => null,
+                .clc_impl => null,
+                .jsr_abs => null,
+                .sec_impl => null,
+                .pha_impl => null,
+                .jmp_abs => null,
+                .rts_impl => null,
+                .adc_zp => .a,
+                .adc_imm => .a,
+                .pla_impl => .a,
+                .adc_abs => .a,
+                .adc_ind_y_zp => .a,
+                .adc_x_ind_zp => .a,
+                .adc_x_abs => .a,
+                .sty_zp => null,
+                .sta_zp => null,
+                .stx_zp => null,
+                .txa_impl => .a,
+                .sty_abs => null,
+                .sta_abs => null,
+                .stx_abs => null,
+                .tya_impl => .a,
+                .ldy_imm => .y,
+                .ldx_imm => .x,
+                .lda_zp => .a,
+                .ldy_zp => .y,
+                .ldx_zp => .x,
+                .tay_impl => .y,
+                .lda_imm => .a,
+                .tax_impl => .x,
+                .lda_abs => .a,
+                .lda_x_abs => .a,
+                .cld_impl => null,
+                .sbc_zp => .a,
+                .sbc_imm => .a,
+                .nop_impl => null,
+                .sbc_abs => .a,
+                .sed_impl => null,
+            };
         }
 
         test getOpcodeMnemonic {

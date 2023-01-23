@@ -1,27 +1,6 @@
 const std = @import("std");
 const bits = @import("bits.zig");
 const Register = bits.Register;
-const RegisterManagerFn = @import("../../register_manager.zig").RegisterManager;
-const Type = @import("../../type.zig").Type;
-
-pub const regs = [_]Register{
-    .a, .x, .y,
-};
-
-const allocatable_registers = regs;
-pub const RegisterManager = RegisterManagerFn(@import("Func.zig"), Register, &allocatable_registers);
-
-const RegisterBitSet = RegisterManager.RegisterBitSet;
-pub const RegisterClass = struct {
-    pub const gp: RegisterBitSet = blk: {
-        var set = RegisterBitSet.initEmpty();
-        set.setRangeValue(.{
-            .start = 0,
-            .end = regs.len,
-        }, true);
-        break :blk set;
-    };
-};
 
 /// Returns operating system-specific zero page addresses that we are free to use for any purpose.
 pub fn getZeroPageAddresses(target: std.Target) std.BoundedArray(u8, 256) {
