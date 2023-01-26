@@ -61,8 +61,6 @@ props: *Module.Fn,
 air: Air,
 /// This lets us know whether an operand dies at which location.
 liveness: Liveness,
-/// The allocator we will be using throughout.
-gpa: mem.Allocator,
 
 //
 // call info
@@ -164,7 +162,6 @@ pub fn generate(
 ) GenerateSymbolError!FnResult {
     _ = debug_output;
 
-    const gpa = bin_file.allocator;
     const memory = Memory.init(bin_file.options.target, bin_file);
     var func = Func{
         .bin_file = bin_file,
@@ -172,7 +169,6 @@ pub fn generate(
         .props = props,
         .air = air,
         .liveness = liveness,
-        .gpa = gpa,
         .memory = memory,
     };
     defer func.deinit();
@@ -199,10 +195,16 @@ pub fn generate(
 }
 
 fn deinit(func: *Func) void {
+    const allocator = func.getAllocator();
     for (func.branches.items) |*branch|
-        branch.deinit(func.gpa);
-    func.branches.deinit(func.gpa);
-    func.mir_instructions.deinit(func.gpa);
+        branch.deinit(allocator);
+    func.branches.deinit(allocator);
+    func.mir_instructions.deinit(allocator);
+}
+
+/// Returns the allocator we will be using throughout.
+fn getAllocator(func: Func) mem.Allocator {
+    return func.bin_file.allocator;
 }
 
 /// Returns the target we are compiling for.
@@ -319,13 +321,13 @@ fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comp
 /// Spills the register if not free and associates it with the new instruction.
 fn freeReg(func: *Func, reg: Register, inst: Air.Inst.Index) !MV {
     const spillReg = struct {
-        fn spillReg(func_inn: *Func, reg_inn: Register, inst_inn: Air.Inst.Index) !void {
-            const val = func_inn.getResolvedInstValue(Air.indexToRef(inst_inn));
+        fn spillReg(func2: *Func, reg2: Register, inst2: Air.Inst.Index) !void {
+            const val = func2.getResolvedInstValue(Air.indexToRef(inst2));
             if (val == .reg)
-                assert(reg_inn == val.reg);
-            const new_home = try func_inn.allocMem(Type.u8);
-            try func_inn.trans(val, new_home, Type.u8, Type.u8);
-            try func_inn.currentBranch().values.put(func_inn.gpa, Air.indexToRef(inst_inn), new_home);
+                assert(reg2 == val.reg);
+            const new_home = try func2.allocMem(Type.u8);
+            try func2.trans(val, new_home, Type.u8, Type.u8);
+            try func2.currentBranch().values.put(func2.getAllocator(), Air.indexToRef(inst2), new_home);
         }
     }.spillReg;
 
@@ -634,14 +636,15 @@ const CallMVs = struct {
 fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
     // ref: https://llvm-mos.org/wiki/C_calling_convention
     const cc = fn_ty.fnCallingConvention();
-    const param_types = try func.gpa.alloc(Type, fn_ty.fnParamLen());
-    defer func.gpa.free(param_types);
+    const allocator = func.getAllocator();
+    const param_types = try allocator.alloc(Type, fn_ty.fnParamLen());
+    defer allocator.free(param_types);
     fn_ty.fnParamTypes(param_types);
     var values = CallMVs{
-        .args = try func.gpa.alloc(MV, param_types.len),
+        .args = try allocator.alloc(MV, param_types.len),
         .return_value = undefined,
     };
-    errdefer func.gpa.free(values.args);
+    errdefer allocator.free(values.args);
 
     switch (cc) {
         .Naked => {
@@ -683,15 +686,16 @@ fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
 }
 
 fn gen(func: *Func) !void {
+    const allocator = func.getAllocator();
     var call_values = try func.resolveCallingConventionValues(func.getType());
-    defer call_values.deinit(func.gpa);
+    defer call_values.deinit(allocator);
     func.args = call_values.args;
     func.ret_val = call_values.return_value;
 
-    try func.branches.append(func.gpa, .{});
+    try func.branches.append(allocator, .{});
     defer {
         var outer_branch = func.branches.pop();
-        outer_branch.deinit(func.gpa);
+        outer_branch.deinit(allocator);
     }
 
     try func.genBody(func.air.getMainBody());
@@ -712,7 +716,7 @@ fn genBody(func: *Func, body: []const Air.Inst.Index) !void {
         if (debug.runtime_safety)
             func.current_inst = inst;
 
-        try func.currentBranch().values.ensureUnusedCapacity(func.gpa, Liveness.bpi);
+        try func.currentBranch().values.ensureUnusedCapacity(func.getAllocator(), Liveness.bpi);
         try func.genInst(inst);
 
         if (debug.runtime_safety) {
@@ -1954,7 +1958,7 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
     log.debug("callee: {}, callee_ty: {}, args: {any}", .{ callee, fn_ty.tag(), args });
 
     var call_values = try func.resolveCallingConventionValues(fn_ty);
-    defer call_values.deinit(func.gpa);
+    defer call_values.deinit(func.getAllocator());
 
     for (call_values.args) |dst, i| {
         const src = try func.resolveInst(args[i]);
@@ -2250,7 +2254,7 @@ const BigTomb = struct {
 
 // TODO: `operand_count: u16`?
 fn iterateBigTomb(func: *Func, inst: Air.Inst.Index, operand_count: usize) !BigTomb {
-    try func.currentBranch().values.ensureUnusedCapacity(func.gpa, operand_count + 1);
+    try func.currentBranch().values.ensureUnusedCapacity(func.getAllocator(), operand_count + 1);
     return BigTomb{
         .func = func,
         .inst = inst,
@@ -2369,7 +2373,7 @@ fn addInstInternal(func: *Func, tag: Mir.Inst.Tag, data: anytype) error{OutOfMem
             }
         }
     }
-    try func.mir_instructions.append(func.gpa, inst);
+    try func.mir_instructions.append(func.getAllocator(), inst);
     log.debug("added instruction .{{ .tag = {}, .data = {} }}", .{ tag, data });
 }
 fn addInstImpl(func: *Func, tag: Mir.Inst.Tag) !void {
@@ -2450,6 +2454,6 @@ fn addInstAny(func: *Func, comptime mnemonic: []const u8, val: MV) !void {
 
 fn fail(func: *Func, comptime fmt: []const u8, args: anytype) error{ CodegenFail, OutOfMemory } {
     @setCold(true);
-    func.err_msg = try Module.ErrorMsg.create(func.gpa, func.src_loc, fmt, args);
+    func.err_msg = try Module.ErrorMsg.create(func.getAllocator(), func.src_loc, fmt, args);
     return error.CodegenFail;
 }
