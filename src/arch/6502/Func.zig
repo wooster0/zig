@@ -375,7 +375,13 @@ const Memory = struct {
     /// Memory addresses in the first page of memory available for storage.
     /// This is expensive, sparsely available memory and very valuable because
     /// writing and reading from it is faster than for absolute memory.
-    /// This must always contain at least two free addresses for pointer derefencing.
+    /// We treat each address separately, rather than using an offset, for ideal zero page
+    /// usage on any system.
+    /// For example, this handles the case of a system where byte #0 is usable,
+    /// byte #1 is unusable (reserved by the system),
+    /// and all other bytes after that of the zero page are usable.
+    /// If we used offsets, this means our offset would start
+    /// at byte #2, giving us one less byte than with this method of zero page allocation.
     zp_free: std.BoundedArray(u8, 256),
     /// The offset at which free absolute memory starts.
     /// Must not start in zero page. Must be contiguously free memory.
@@ -389,34 +395,47 @@ const Memory = struct {
     //       alternatively, associate each alloc with an AIR instruction and track it that way?
     ///// The absolute memory address at which memory ends.
     //abs_end: u16,
+    /// Our reserve of two contiguous zero page addresses, for temporary use.
+    /// We need at most this in order for codegen not to fail due to zero page shortage.
+    /// It is fine for this to be null if the reserve never ends up being used.
+    // TODO: use this reserve for other things if we never end up needing this reserve.
+    //       in the past we had a allocZeroPageDerefAddress function which allocated on-demand.
+    //       problem was that it couldn't guarantee 2 contiguous addresses even if we had them once.
+    zp_res: ?[2]u8,
 
     fn init(target: std.Target, bin_file: *link.File) Memory {
         if (bin_file.cast(link.File.Prg)) |prg| {
-            if (prg.zp_free != null and prg.abs_offset != null) {
-                const zp_free = prg.zp_free.?;
-                const abs_offset = prg.abs_offset.?;
+            if (prg.zp_free != null and prg.abs_offset != null and prg.zp_res != null) {
                 return .{
-                    .zp_free = zp_free,
-                    .abs_offset = abs_offset,
+                    .zp_free = prg.zp_free.?,
+                    .abs_offset = prg.abs_offset.?,
+                    .zp_res = prg.zp_res.?,
                 };
             }
         } else unreachable;
 
         const zp_free = abi.getZeroPageAddresses(target);
         const abs_offset = abi.getAbsoluteMemoryOffset(target);
-        return .{
+        var memory = Memory{
             .zp_free = zp_free,
             .abs_offset = abs_offset,
+            .zp_res = undefined,
         };
+        memory.zp_res = if (memory.allocZeroPageMemory(2)) |contig_zp_start|
+            [2]u8{ contig_zp_start, contig_zp_start + 1 }
+        else
+            null;
+        return memory;
     }
 
-    /// Allocates two bytes specifically from the zero page for the purpose of storing a pointer address and dereferencing that pointer.
-    fn allocZeroPageDerefAddress(memory: *Memory) !MV {
-        if (memory.allocZeroPageMemory(2)) |addr|
-            return addr;
-        const func = @fieldParentPtr(Func, "memory", memory);
-        return func.fail("unable to dereference pointer due to zero page shortage", .{});
-    }
+    ///// Allocates two bytes specifically from the zero page for the purpose of storing a pointer address and dereferencing that pointer.
+    //// TODO: unused; remove
+    //fn allocZeroPageDerefAddress(memory: *Memory) !MV {
+    //    if (memory.allocZeroPageMemory(2)) |addr|
+    //        return addr;
+    //    const func = @fieldParentPtr(Func, "memory", memory);
+    //    return func.fail("unable to dereference pointer due to zero page shortage", .{});
+    //}
 
     /// Preserves the current memory state for the next function's codegen.
     fn preserve(memory: *Memory) void {
@@ -432,6 +451,7 @@ const Memory = struct {
         if (func.bin_file.cast(link.File.Prg)) |prg| {
             prg.abs_offset = memory.abs_offset;
             prg.zp_free = memory.zp_free;
+            prg.zp_res = memory.zp_res;
         } else unreachable;
     }
 
@@ -449,16 +469,16 @@ const Memory = struct {
             // we like single-byte allocations because we think it helps
             // the zero page be used for as many different things as possible,
             // meaning the zero page's efficiency can spread to more code,
-            // but we must still make sure the zero page has at least 2 addresses free
-            (byte_count == 1 and memory.zp_free.len > 2);
+            // and we allow this to deplete the zero page
+            (byte_count == 1 and memory.zp_free.len >= 1);
 
         if (use_zero_page) {
             if (memory.allocZeroPageMemory(byte_count)) |addr|
-                return addr;
+                return .{ .zp = addr };
         }
 
         if (memory.allocAbsoluteMemory(byte_count)) |addr|
-            return addr;
+            return .{ .abs = addr };
 
         // OOM
         // TODO: test this error
@@ -471,72 +491,83 @@ const Memory = struct {
         return func.fail("program depleted all {} bytes of memory", .{depleted_total});
     }
 
+    /// Allocates contiguous zero page memory of the given size and returns a start address to the first byte.
     /// Returns null if OOM or if no contiguous bytes were found.
-    fn allocZeroPageMemory(memory: *Memory, byte_count: u16) ?MV {
+    fn allocZeroPageMemory(memory: *Memory, byte_count: u16) ?u8 {
         assert(byte_count != 0);
+
+        std.debug.print("zp_free BEFORE: {any}\n", .{memory.zp_free.constSlice()});
+        defer std.debug.print("zp_free AFTER: {any}\n", .{memory.zp_free.constSlice()});
+
+        if (memory.zp_free.len == 0)
+            return null;
+
         const addrs = memory.zp_free.constSlice();
         if (debug.runtime_safety and !std.sort.isSorted(u8, addrs, {}, std.sort.asc(u8)))
             @panic("free zero page addresses must be sorted low to high");
+
         // find a matching number of free bytes, each with an address only 1 apart from the one before it (contiguous)
-        var contig_count: u8 = 0;
-        var contig_addr_i: u8 = 0;
-        var i: u8 = 0;
-        while (true) {
-            if (i >= addrs.len)
-                break;
-            const addr1 = addrs[i];
-            i += 1;
-            if (i >= addrs.len)
-                break;
-            const addr2 = addrs[i];
-            i += 1;
-            const contig = addr1 == addr2 - 1;
-            if (contig) {
-                contig_count += 2;
-                if (contig_count == byte_count)
-                    break contig_addr_i;
-            } else {
-                // would this be enough?
-                if (contig_count + 1 == byte_count) {
-                    contig_count += 1;
-                    break contig_addr_i;
+        var contig_addrs_i: u8 = 0;
+        var contig_addrs_len: u8 = 1;
+        {
+            var i: u8 = 0;
+            while (true) {
+                if (contig_addrs_len == byte_count) break;
+                const addr1 = addrs[i];
+                i += 1;
+                if (i == addrs.len) {
+                    if (contig_addrs_len == byte_count) {
+                        break;
+                    } else {
+                        return null;
+                    }
+                }
+                const addr2 = addrs[i];
+                assert(addr1 != addr2); // zero page addresses must not contain duplicates
+                const contig = addr1 == addr2 - 1;
+                if (contig) {
+                    contig_addrs_len += 1;
+                    if (contig_addrs_len == byte_count) break;
                 } else {
-                    // no; reset
-                    contig_count = 1;
-                    contig_addr_i = i;
+                    contig_addrs_i = i;
+                    contig_addrs_len = 1;
                 }
             }
-        } else return null;
-        if (contig_addr_i + byte_count <= memory.zp_free.len) {
-            // TODO: what's generally faster?
-            //       1. multiple `swapRemove`s and then one `std.sort.sort` at the end
-            //       or 2. multiple `orderedRemove` and no `std.sort.sort`?
-            const start_addr = memory.zp_free.swapRemove(contig_addr_i);
-            var times: u16 = 1;
-            while (times < byte_count) : (times += 1)
-                _ = memory.zp_free.swapRemove(contig_addr_i + times);
-            std.sort.sort(u8, memory.zp_free.slice(), {}, std.sort.asc(u8));
-            return MV{ .zp = start_addr };
         }
-        return null;
+
+        std.debug.print("i: {} len: {}\n", .{ contig_addrs_i, contig_addrs_len });
+        // TODO: what's generally faster?
+        //       1. multiple `swapRemove`s and then one `std.sort.sort` at the end
+        //       or 2. multiple `orderedRemove` and no `std.sort.sort`?
+        // remove in reverse to avoid OOB
+        var i = contig_addrs_len - 1;
+        while (i > 0) : (i -= 1)
+            _ = memory.zp_free.swapRemove(contig_addrs_i + i);
+        const start_addr = memory.zp_free.swapRemove(contig_addrs_i + i);
+        std.sort.sort(u8, memory.zp_free.slice(), {}, std.sort.asc(u8));
+        return start_addr;
     }
 
+    /// Allocates contiguous absolute memory of the given size and returns a start address to the first byte.
     /// Returns null if OOM.
-    fn allocAbsoluteMemory(memory: *Memory, byte_count: u16) ?MV {
+    fn allocAbsoluteMemory(memory: *Memory, byte_count: u16) ?u16 {
         assert(byte_count != 0);
         // TODO:
         //if (addr == abs.abs_end) {
         //    return null;
         //}
         memory.abs_offset -= byte_count; // grow the stack downwards
-        return MV{ .abs = memory.abs_offset + 1 };
+        return memory.abs_offset + 1;
     }
 
-    fn free(memory: *Memory, value: MV, ty: Type) void {
+    // TODO: can probably remove this eventually
+    fn free(memory: *Memory, val: MV, ty: Type) void {
         const func = @fieldParentPtr(Func, "memory", memory);
         const byte_size = func.getByteSize(ty).?;
-        log.debug("I want to free {} bytes", .{byte_size});
-        switch (value) {
+        log.debug("freeing {} bytes from {}", .{ byte_size, val });
+        std.debug.print("zp_free BEFORE: {any}\n", .{memory.zp_free.constSlice()});
+        defer std.debug.print("zp_free AFTER: {any}\n", .{memory.zp_free.constSlice()});
+        switch (val) {
             .zp => |addr| {
                 // TODO: insert at the right position right away? without sorting after
                 var i: u8 = 0;
@@ -559,21 +590,67 @@ const Memory = struct {
         var memory = Memory{
             .zp_free = zp_free,
             .abs_offset = undefined,
+            .zp_res = undefined,
         };
-        try testing.expectEqual(MV{ .zp = 0 }, memory.allocZeroPageMemory(3).?);
-        try testing.expectEqual(MV{ .zp = 4 }, memory.allocZeroPageMemory(2).?);
-        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(2));
-        try testing.expectEqual(MV{ .zp = 0x80 }, memory.allocZeroPageMemory(1).?);
-        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(10));
-        try testing.expectEqual(MV{ .zp = 0x90 }, memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(u8, 0), memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(@as(u8, 4), memory.allocZeroPageMemory(2).?);
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(2));
+        try testing.expectEqual(@as(u8, 0x80), memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(10));
+        try testing.expectEqual(@as(u8, 0x90), memory.allocZeroPageMemory(1).?);
         try testing.expectEqual(@as(u8, 0), @intCast(u8, memory.zp_free.len));
 
         memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xfe, 0xff });
-        try testing.expectEqual(MV{ .zp = 0xfe }, memory.allocZeroPageMemory(1).?);
-        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(0xff));
-        try testing.expectEqual(MV{ .zp = 0xff }, memory.allocZeroPageMemory(1).?);
-        try testing.expectEqual(@as(?MV, null), memory.allocZeroPageMemory(1));
+        try testing.expectEqual(@as(u8, 0xfe), memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(0xff));
+        try testing.expectEqual(@as(u8, 0xff), memory.allocZeroPageMemory(1).?);
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(1));
         try testing.expectEqual(@as(u8, 0), @intCast(u8, memory.zp_free.len));
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 2, 4, 6, 8, 10 });
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(2));
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(3));
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(4));
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(5));
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(6));
+        try testing.expectEqual(@as(u8, 6), @intCast(u8, memory.zp_free.len));
+        memory.zp_free.len = 0;
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFD, 0xFF });
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(2));
+        try testing.expectEqual(@as(u8, 2), @intCast(u8, memory.zp_free.len));
+        memory.zp_free.len = 0;
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 2, 4 });
+        try testing.expectEqual(@as(?u8, null), memory.allocZeroPageMemory(3));
+        memory.zp_free.len = 0;
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFD, 0xFE, 0xFF });
+        try testing.expectEqual(@as(u8, 0xFD), memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(@as(u8, 0), @intCast(u8, memory.zp_free.len));
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFC, 0xFD, 0xFE });
+        try testing.expectEqual(@as(u8, 0xFC), memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(@as(u8, 0), @intCast(u8, memory.zp_free.len));
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFB, 0xFC, 0xFD, 0xFE });
+        try testing.expectEqual(@as(u8, 0xFB), memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(@as(u8, 1), @intCast(u8, memory.zp_free.len));
+        memory.zp_free.len = 0;
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0x02, 0x2A, 0x52, 0xFB, 0xFC, 0xFD, 0xFE });
+        try testing.expectEqual(@as(u8, 0xFB), memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(@as(u8, 4), @intCast(u8, memory.zp_free.len));
+        memory.zp_free.len = 0;
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 2, 4, 8, 16, 17, 18, 32, 64, 128 });
+        try testing.expectEqual(@as(u8, 16), memory.allocZeroPageMemory(3).?);
+        try testing.expectEqual(@as(u8, 6), @intCast(u8, memory.zp_free.len));
+        memory.zp_free.len = 0;
+
+        memory.zp_free.appendSliceAssumeCapacity(&[_]u8{ 2, 42, 82, 253, 254 });
+        try testing.expectEqual(@as(u8, 5), @intCast(u8, memory.zp_free.len));
+        memory.zp_free.len = 0;
     }
 
     test allocAbsoluteMemory {
@@ -581,12 +658,13 @@ const Memory = struct {
             .zp_free = undefined,
             .abs_offset = 0xffff,
             //.abs_end = 0xfeff,
+            .zp_res = undefined,
         };
-        try testing.expectEqual(MV{ .abs = 0xffff }, memory.allocAbsoluteMemory(1).?);
-        try testing.expectEqual(MV{ .abs = 0xfffe }, memory.allocAbsoluteMemory(1).?);
-        try testing.expectEqual(MV{ .abs = 0xfff0 }, memory.allocAbsoluteMemory(0xe).?);
-        try testing.expectEqual(MV{ .abs = 0xffee }, memory.allocAbsoluteMemory(2).?);
-        try testing.expectEqual(MV{ .abs = 0xff6e }, memory.allocAbsoluteMemory(128).?);
+        try testing.expectEqual(@as(u16, 0xffff), memory.allocAbsoluteMemory(1).?);
+        try testing.expectEqual(@as(u16, 0xfffe), memory.allocAbsoluteMemory(1).?);
+        try testing.expectEqual(@as(u16, 0xfff0), memory.allocAbsoluteMemory(0xe).?);
+        try testing.expectEqual(@as(u16, 0xffee), memory.allocAbsoluteMemory(2).?);
+        try testing.expectEqual(@as(u16, 0xff6e), memory.allocAbsoluteMemory(128).?);
         //try testing.expectEqual(@as(?MV,null), memory.allocAbsoluteMemory(0xffff).?);
         try testing.expectEqual(@as(u16, 0xff6d), memory.abs_offset);
     }
@@ -2442,8 +2520,7 @@ fn addInstAny(func: *Func, comptime mnemonic: []const u8, val: MV) !void {
         .none => try func.addInstImpl(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_impl").?),
         .imm => |imm| try func.addInstImm(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_imm").?, imm),
         .reg => {
-            const temp = func.memory.allocZeroPageMemory(1).?; // TODO: handle error
-            defer func.memory.free(temp, Type.u8);
+            const temp = .{ .zp = (func.memory.zp_res orelse return func.fail("zero page depleted", .{}))[0] };
             //try func.load(temp, val, Type.u8);
             try func.trans(val, temp, Type.u8, Type.u8);
             try func.addInstAny(mnemonic, temp);
