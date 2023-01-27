@@ -51,8 +51,10 @@ block_index: u16 = 0,
 /// One declaration can have multiple unnamed constants associated with it.
 unnamed_consts_blocks: std.AutoHashMapUnmanaged(Module.Decl.Index, std.ArrayListUnmanaged(Block)) = .{},
 
+// memory state we need to preserve across functions
 abs_offset: ?u16 = null,
 zp_free: ?std.BoundedArray(u8, 256) = null,
+zp_res: ?[2]u8 = null,
 
 pub const base_tag: File.Tag = .prg;
 
