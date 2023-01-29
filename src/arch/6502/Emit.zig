@@ -1,6 +1,8 @@
-//! This is what emits our MIR to the format we want, such as executable machine code.
+//! Emits MIR to the format we want, such as executable machine code.
 
-// TODO: would be nice if we could emit a textual representation using -femit-asm once that is a possibility for in-house backends
+// TODO: would be nice if we could emit a textual representation using -femit-asm once that is a possibility for in-house backends.
+//       also, add ';' comments that explain the purpose of an instruction. for that add metadata to each instruction explaining why it was added
+//       (maybe only in debug mode or make it configurable)
 
 const std = @import("std");
 const math = std.math;
@@ -19,8 +21,10 @@ const Emit = @This();
 /// Our machine instructions including payloads to be lowered.
 mir: Mir,
 bin_file: *link.File,
-/// This is the final output of our codegen.
+/// The output of this emit.
 code: *std.ArrayList(u8),
+/// The index of the declaration that code is being generated for.
+decl_index: Module.Decl.Index,
 
 pub fn emitMir(emit: *Emit) !void {
     const mir_tags = emit.mir.instructions.items(.tag);
@@ -57,36 +61,20 @@ fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsoluteAddress) !void {
     switch (abs_addr) {
         .imm => |imm| try emit.emitWord(imm),
         .unresolved => |unresolved| {
-            // resolve and emit
-            const addr = if (emit.bin_file.cast(link.File.Prg)) |prg| addr: {
-                var it = prg.blocks.iterator();
-                while (it.next()) |entry| {
-                    std.log.debug("block: {} -> {}", .{ entry.key_ptr.*, entry.value_ptr.* });
-                }
-                const load_address = prg.getLoadAddress();
-                var program_size = emit.getProgramSize()
-                // note that our program is loaded at the load address so
-                // subtract the size of the address itself
-                - @sizeOf(@TypeOf(load_address));
-                var program_index: u16 = 0;
-                const decl_index_and_blocks = try prg.getAllBlocks(emit.bin_file.allocator);
-                defer emit.bin_file.allocator.free(decl_index_and_blocks);
-                break :addr for (decl_index_and_blocks) |decl_index_and_block| {
-                    const block = decl_index_and_block.block;
-                    assert(!block.entry_point);
-                    std.log.debug("load_address: {}, program_size: {}, program_index: {}, offset: {}", .{ load_address, program_size, program_index, unresolved.offset });
-                    if (block.index == unresolved.blk_i) {
-                        const imm = load_address + ((program_size + program_index) + unresolved.offset);
-                        log.debug("block with index {x} will end up at address {x} in the final binary", .{ block.index, imm });
-                        break imm;
-                    }
-                    if (block.code) |code|
-                        program_index += @intCast(u16, code.len);
-                } else unreachable;
-            } else {
-                unreachable;
-            };
-            try emit.emitWord(addr);
+            // we are currently emitting a single function's code and we can not
+            // resolve this absolute address in this function before we have the code of all
+            // other functions, so we will let the linker fix this up later and emit
+            // a placeholder for now
+            const code_offset = emit.codeOffset();
+            try emit.emitWord(undefined);
+            if (emit.bin_file.cast(link.File.Prg)) |prg| {
+                try prg.unresolved_addresses.append(emit.bin_file.allocator, .{
+                    .decl_index = emit.decl_index,
+                    .code_offset = code_offset,
+                    .block_index = unresolved.blk_i,
+                    .offset = unresolved.offset,
+                });
+            } else unreachable;
         },
         .current => |current| {
             const addr = if (emit.bin_file.cast(link.File.Prg)) |prg| addr: {
@@ -114,6 +102,10 @@ fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsoluteAddress) !void {
             try emit.emitWord(addr);
         },
     }
+}
+
+fn codeOffset(emit: Emit) u16 {
+    return @intCast(u16, emit.code.items.len);
 }
 
 /// Returns the size of the program up to this function including any headers sans any symbols.

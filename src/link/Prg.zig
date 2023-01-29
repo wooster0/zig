@@ -45,13 +45,20 @@ error_flags: File.ErrorFlags = File.ErrorFlags{},
 header: []const u8,
 
 blocks: std.AutoArrayHashMapUnmanaged(Module.Decl.Index, Block) = .{},
+/// A pool of free block indices that can be reused for new blocks.
 free_block_indices: std.ArrayListUnmanaged(u16) = .{},
-block_index: u16 = 0,
+/// Holds the next block's index.
+/// 0 is reserved for the entry point and must not be freed.
+block_index: u16 = 1,
 
 /// One declaration can have multiple unnamed constants associated with it.
 unnamed_consts_blocks: std.AutoHashMapUnmanaged(Module.Decl.Index, std.ArrayListUnmanaged(Block)) = .{},
 
-// memory state we need to preserve across functions
+/// This holds a list of absolute addresses that we are yet to resolve.
+/// These will be resolved only after we know the code of the entire program.
+unresolved_addresses: std.ArrayListUnmanaged(UnresolvedAddress) = .{},
+
+// memory state we need to preserve across function codegens (TODO: encapsulate)
 abs_offset: ?u16 = null,
 zp_free: ?std.BoundedArray(u8, 256) = null,
 zp_res: ?[2]u8 = null,
@@ -60,31 +67,36 @@ pub const base_tag: File.Tag = .prg;
 
 /// A function or a symbol.
 const Block = struct {
-    /// This is nullable because we may allocate this block in
-    /// `allocateDeclIndexes` without any code and free it in `freeDecl`
-    /// without ever generating code for it.
-    code: ?[]const u8,
+    /// This is mutable so that we can fix up unresolved addresses and resolve them.
+    /// This is nullable because we might record a block's existence but do not have its code yet.
+    code: ?[]u8,
     /// All blocks written to the final binary must be written sorted by this index.
+    /// If this is 0, it means execution starts at this block's code,
+    /// which can be either a function as well as a symbol.
     index: u16,
-    /// This can technically be true for a symbol, in which case execution would start at the symbol's code.
-    entry_point: bool,
     /// Whether this block is actually used in the final binary and should be included (to avoid bloat).
     /// TODO: this works around something that the Zig compiler should be able to do; see:
     /// * https://github.com/ziglang/zig/issues/6256
     /// * https://github.com/ziglang/zig/issues/13111
     /// * https://github.com/ziglang/zig/issues/14003
-    used: bool = false, // TODO: actually use this field
+    //used: bool = false, // TODO: actually use this field
 
-    const Type = enum { function, symbol };
-
-    fn deinit(block: *Block, allocator: Allocator, prg: *Prg) void {
+    fn deinit(block: *Block, allocator: Allocator) void {
         if (block.code) |code|
             allocator.free(code);
-        prg.free_block_indices.append(allocator, block.index) catch {
-            // TODO
-            @panic("oom probably");
-        };
     }
+};
+
+/// An unresolved absolute memory address.
+pub const UnresolvedAddress = struct {
+    /// The declaration this unresolved address is within.
+    decl_index: Module.Decl.Index,
+    /// Where in this block's code the resolved address is to be written.
+    code_offset: u16,
+    /// The index of the block whose address should be resolved.
+    block_index: u16,
+    /// An addend to be added to the resolved address;
+    offset: u16 = 0,
 };
 
 pub fn createEmpty(allocator: Allocator, options: link.Options) !*Prg {
@@ -127,19 +139,19 @@ pub fn openPath(allocator: Allocator, sub_path: []const u8, options: link.Option
 }
 
 pub fn deinit(prg: *Prg) void {
-    for (prg.blocks.values()) |*block| {
-        block.deinit(prg.base.allocator, prg);
-    }
+    for (prg.blocks.values()) |*block|
+        block.deinit(prg.base.allocator);
     prg.blocks.deinit(prg.base.allocator);
     prg.base.allocator.free(prg.header);
     var it = prg.unnamed_consts_blocks.iterator();
     while (it.next()) |blocks| {
         for (blocks.value_ptr.items) |*block|
-            block.deinit(prg.base.allocator, prg);
+            block.deinit(prg.base.allocator);
         blocks.value_ptr.deinit(prg.base.allocator);
     }
     prg.unnamed_consts_blocks.deinit(prg.base.allocator);
     prg.free_block_indices.deinit(prg.base.allocator);
+    prg.unresolved_addresses.deinit(prg.base.allocator);
 }
 
 /// Returns the block index of the lowered unnamed constant, as a `u32` but should be casted to `u16`.
@@ -157,9 +169,8 @@ pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Inde
         .{ .none = {} },
         .{ .parent_atom_index = @enumToInt(decl_index) },
     );
-    const code = switch (res) {
-        .externally_managed => |external_value| external_value,
-        .appended => buf.items,
+    var code = switch (res) {
+        .ok => buf.items,
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
             try module.failed_decls.putNoClobber(module.gpa, decl_index, error_message);
@@ -167,11 +178,10 @@ pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Inde
         },
     };
 
-    const blk_i = prg.getNewBlockIndex();
+    const blk_i = try prg.allocBlockIndex();
     const unnamed_const = Block{
         .code = code,
         .index = blk_i,
-        .entry_point = false,
     };
 
     const gop = try prg.unnamed_consts_blocks.getOrPut(prg.base.allocator, decl_index);
@@ -184,7 +194,8 @@ pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Inde
     return blk_i;
 }
 
-fn getNewBlockIndex(prg: *Prg) u16 {
+/// Allocates a new block index assignable to a new block.
+fn allocBlockIndex(prg: *Prg) !u16 {
     if (prg.free_block_indices.popOrNull()) |blk_i|
         return blk_i;
     const blk_i = prg.block_index;
@@ -192,7 +203,14 @@ fn getNewBlockIndex(prg: *Prg) u16 {
     return blk_i;
 }
 
+/// Frees a block index and allows it to be reused.
+fn freeBlockIndex(prg: *Prg, index: u16) !void {
+    assert(index != 0); // this block index existed initially and must not be freed
+    try prg.free_block_indices.append(prg.base.allocator, index);
+}
+
 pub fn flush(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node) !void {
+    log.debug("flush...", .{});
     return prg.flushModule(comp, prog_node);
 }
 
@@ -235,10 +253,9 @@ pub fn recordDecl(prg: *Prg, decl_index: Module.Decl.Index) !u16 {
     if (gop.found_existing) {
         return gop.value_ptr.index;
     } else {
-        const blk_i = prg.getNewBlockIndex();
+        const blk_i = try prg.allocBlockIndex();
         gop.value_ptr.* = .{
             .code = null,
-            .entry_point = false,
             .index = blk_i,
         };
         return blk_i;
@@ -250,6 +267,7 @@ pub fn recordDecl(prg: *Prg, decl_index: Module.Decl.Index) !u16 {
 pub fn getLoadAddress(prg: Prg) u16 {
     return switch (prg.base.options.target.os.tag) {
         .c64 => 0x0801,
+        // TODO: actually test the 6502-freestanding target
         .freestanding => 0x0200, // after the zero page and the stack
         else => unreachable,
     };
@@ -266,8 +284,10 @@ fn writeHeader(prg: Prg) ![]const u8 {
             const load_address = prg.getLoadAddress();
             try writer.writeIntLittle(u16, load_address);
 
-            // TODO: -fno-basic-bootstrap to allow omitting this code
+            // TODO: -fno-basic-bootstrap or `-fbasic-bootstrap=false` etc. to allow omitting this entirely optional code
             // TODO: allow embedding custom BASIC commands? with `asm`?
+            //       shouldn't it be possible if I use `fno-basic-bootstrap` and then
+            //       write the bootstrap code in comptime top-level asm at the top of the file?
             // the following is minimal BASIC bootstrap code that allows us to run our program
             // using the RUN command, right after loading it, making our program distributable
 
@@ -304,7 +324,7 @@ fn writeHeader(prg: Prg) ![]const u8 {
 
 const DeclIndexAndBlock = struct { decl_index: Module.Decl.Index, block: Block };
 
-/// Returns all recorded blocks in block index order.
+/// Returns all recorded blocks in block index order, with the entry point block first.
 /// This is necessary in order to know where exactly a block will end up in the final binary.
 pub fn getAllBlocks(prg: *Prg, allocator: Allocator) ![]const DeclIndexAndBlock {
     var decl_index_and_blocks = std.ArrayList(DeclIndexAndBlock).init(allocator);
@@ -335,6 +355,8 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
         @panic("attempted to compile for object format that was disabled by build configuration");
     }
 
+    log.debug("flush module...", .{});
+
     try prg.verifyBuildOptions();
 
     var sub_prog_node = prog_node.start("Flush Module", 0);
@@ -342,11 +364,6 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     defer sub_prog_node.end();
 
     const file = prg.base.file.?;
-
-    var it = prg.blocks.iterator();
-    while (it.next()) |entry| {
-        log.debug("block: {} -> {}", .{ entry.key_ptr.*, entry.value_ptr.* });
-    }
 
     var file_flush = FileFlush{};
     defer file_flush.deinit(prg.base.allocator);
@@ -359,25 +376,46 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     const decl_index_and_blocks = try prg.getAllBlocks(prg.base.allocator);
     defer prg.base.allocator.free(decl_index_and_blocks);
 
-    // put the entry point function code first so that we start execution there
-    const entry_point_function = for (decl_index_and_blocks) |decl_index_and_block| {
-        if (decl_index_and_block.block.entry_point)
-            break decl_index_and_block.block;
-    } else {
-        prg.error_flags.no_entry_point_found = true;
-        return;
-    };
-    const entry_point_code = entry_point_function.code.?;
-    assert(entry_point_code.len != 0);
-    file_flush.appendBufAssumeCapacity(entry_point_code);
+    // resolve all unresolved addresses
+    for (prg.unresolved_addresses.items) |unresolved_address| {
+        log.debug("resolving {}...", .{unresolved_address});
 
-    // now come all the other functions and symbols
+        // figure out the address of `unresolved_address.block_index`
+        var offset: u16 = 0;
+        const blk_addr = (for (decl_index_and_blocks) |decl_index_and_block| {
+            const block = decl_index_and_block.block;
+            const code = block.code.?;
+            assert(code.len != 0);
+            if (unresolved_address.block_index == block.index) {
+                const load_address = prg.getLoadAddress();
+                break load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
+            }
+            offset += @intCast(u16, code.len);
+        } else unreachable) + unresolved_address.offset;
+
+        var owner_block = for (decl_index_and_blocks) |decl_index_and_block| {
+            if (decl_index_and_block.decl_index == unresolved_address.decl_index)
+                break decl_index_and_block.block;
+        } else unreachable;
+
+        log.debug("resolved address {} as 0x{X:0>4}", .{ unresolved_address, blk_addr });
+
+        mem.writeIntLittle(u16, @ptrCast(*[2]u8, owner_block.code.?[unresolved_address.code_offset..][0..2]), blk_addr);
+    }
+
+    // write all the functions and symbols.
+    // `getAllBlocks` puts the entry point block code first so that we start execution there.
+    var offset: u16 = 0;
     try file_flush.ensureUnusedCapacity(prg.base.allocator, decl_index_and_blocks.len);
     for (decl_index_and_blocks) |decl_index_and_block| {
-        if (decl_index_and_block.block.entry_point) continue;
-        const code = decl_index_and_block.block.code.?;
+        const block = decl_index_and_block.block;
+        const code = block.code.?;
         assert(code.len != 0);
+        const load_address = prg.getLoadAddress();
+        const addr = load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
+        log.debug("writing block {} of address 0x{X:0>4}", .{ decl_index_and_block.block, addr });
         file_flush.appendBufAssumeCapacity(code);
+        offset += @intCast(u16, code.len);
     }
 
     try file_flush.flush(file);
@@ -387,12 +425,14 @@ pub fn freeDecl(prg: *Prg, decl_index: Module.Decl.Index) void {
     log.debug("freeDecl for {}...", .{decl_index});
     if (prg.blocks.fetchSwapRemove(decl_index)) |kv| {
         var block = kv.value;
-        block.deinit(prg.base.allocator, prg);
+        block.deinit(prg.base.allocator);
+        prg.freeBlockIndex(block.index) catch {
+            // TODO: propose making freeDecl errorable. Plan9 is facing this exact problem in their freeDecl too
+        };
     }
 }
 
 /// Generates a declaration's code.
-/// Called after `allocateDeclIndexes`.
 pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !void {
     const decl = module.declPtr(decl_index);
 
@@ -411,9 +451,11 @@ pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !vo
         .{ .none = {} },
         .{ .parent_atom_index = @enumToInt(decl_index) },
     );
-    const code = switch (res) {
-        .externally_managed => |external_value| external_value,
-        .appended => buf.items,
+    // TODO: instead of using `var code` in this and other places,
+    //       use `const code` and then later in `flushModule` where you mutate this,
+    //       use the upcoming `@qualCast`
+    var code = switch (res) {
+        .ok => buf.items,
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
             try module.failed_decls.putNoClobber(module.gpa, decl_index, error_message);
@@ -431,15 +473,13 @@ pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !vo
     } else {
         const block = .{
             .code = code,
-            .index = prg.getNewBlockIndex(),
-            .entry_point = false,
+            .index = try prg.allocBlockIndex(),
         };
         gop.value_ptr.* = block;
     }
 }
 
 /// Generates a function's code.
-/// Called after `allocateDeclIndexes`.
 pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, liveness: Liveness) !void {
     if (build_options.skip_non_native and builtin.object_format != .prg) {
         @panic("attempted to compile for object format that was disabled by build configuration");
@@ -451,7 +491,7 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
     // this function is being updated so we need to redo this as well
     if (prg.unnamed_consts_blocks.getPtr(decl_index)) |unnamed_consts| {
         for (unnamed_consts.items) |*unnamed_const|
-            unnamed_const.deinit(prg.base.allocator, prg);
+            unnamed_const.deinit(prg.base.allocator);
         unnamed_consts.clearAndFree(prg.base.allocator);
     }
 
@@ -468,7 +508,7 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
         .{ .none = {} },
     );
     const code = switch (res) {
-        .appended => buf.items,
+        .ok => buf.items,
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
             try module.failed_decls.putNoClobber(prg.base.allocator, decl_index, error_message);
@@ -483,11 +523,10 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
             prg.base.allocator.free(old_code);
         block.code = code;
     } else {
-        const blk_i = prg.getNewBlockIndex();
+        const blk_i = try prg.allocBlockIndex();
         const block = .{
             .code = code,
             .index = blk_i,
-            .entry_point = false,
         };
         gop.value_ptr.* = block;
     }
@@ -498,13 +537,6 @@ pub fn getDeclVAddr(prg: *Prg, decl_index: Module.Decl.Index, reloc_info: link.F
     debug.panic("do we need `getDeclVAddr`? {}, {}", .{ decl_index, reloc_info });
 }
 
-/// Always called before `updateDecl` or `updateDeclExports`.
-pub fn allocateDeclIndexes(prg: *Prg, decl_index: Module.Decl.Index) !void {
-    _ = prg;
-    log.debug("allocateDeclIndexes for {}", .{decl_index});
-}
-
-/// Called after `allocateDeclIndexes`.
 pub fn updateDeclExports(
     prg: *Prg,
     module: *Module,
@@ -515,9 +547,10 @@ pub fn updateDeclExports(
     //       (entry, main, start?). we are free to choose any name we like.
     const entry_name = prg.base.options.entry orelse "_start";
 
-    log.debug("updateDeclExports... for {}, exports: {any}", .{ decl_index, exports });
+    log.debug("updateDeclExports... for {}", .{decl_index});
     for (exports) |@"export"| {
-        log.debug("export: {} ({s})", .{ @"export", @"export".options.name });
+        log.debug("export: {s}", .{@"export".options.name});
+        //log.debug("export: {}", .{@"export"});
         const options_are_default =
             @"export".options.visibility == .default and
             @"export".options.section == null and
@@ -539,14 +572,13 @@ pub fn updateDeclExports(
             }
             const gop = try prg.blocks.getOrPut(prg.base.allocator, decl_index);
             if (gop.found_existing) {
-                log.debug("updateDeclExports: found existing", .{});
                 const block = gop.value_ptr;
-                block.entry_point = true;
+                try prg.freeBlockIndex(block.index);
+                block.index = 0;
             } else {
                 const block = .{
                     .code = null,
-                    .index = prg.getNewBlockIndex(),
-                    .entry_point = true,
+                    .index = 0,
                 };
                 gop.value_ptr.* = block;
             }
