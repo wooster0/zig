@@ -111,6 +111,7 @@ pub const Inst = struct {
         stx_abs      = 0x8E, // STX $XXXX    ; STore X
         tya_impl     = 0x98, // TYA          ; Transfer Y to A
         ldy_imm      = 0xA0, // LDY #$XX     ; LoaD Y
+        lda_x_ind_zp = 0xA1, // LDX ($XX, X) ; LoaD X
         ldx_imm      = 0xA2, // LDX #$XX     ; LoaD X
         lda_zp       = 0xA5, // LDA $XX      ; LoaD A
         ldy_zp       = 0xA4, // LDY $XX      ; LoaD Y
@@ -176,6 +177,7 @@ pub const Inst = struct {
                 .stx_abs => null,
                 .tya_impl => .a,
                 .ldy_imm => .y,
+                .lda_x_ind_zp => .a,
                 .ldx_imm => .x,
                 .lda_zp => .a,
                 .ldy_zp => .y,
@@ -221,18 +223,12 @@ pub const Inst = struct {
     };
 
     // TODO: use `extra` for this?
-    //       maybe we should have WValue.memory_offset like Wasm. Example:
-    //       .memory_offset => |mem_off| {
-    //           const extra_index = try func.addExtra(Mir.Memory{ .pointer = mem_off.pointer, .offset = mem_off.offset });
-    //           try func.addInst(.{ .tag = .memory_address, .data = .{ .payload = extra_index } });
-    //        },
     pub const AbsoluteAddress = union(enum) {
         /// The address is known and immediately available.
         imm: u16,
         /// The absolute memory address is unknown and yet to be resolved by the linker.
         unresolved: struct {
             blk_i: u16,
-            // TODO: this might have to be i32 to allow going backwards, too (rename to `index`?)
             offset: u16 = 0,
         },
         /// The current address of this word subtracted by the given offset.
