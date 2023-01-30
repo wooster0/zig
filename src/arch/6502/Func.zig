@@ -120,7 +120,7 @@ air_current_inst: if (debug.runtime_safety) Air.Inst.Index else void = if (debug
 
 /// Addressable memory state global across all functions.
 /// Helpers: allocMem
-memory: Memory,
+addr_mem: AddressableMemory,
 
 // registers
 //
@@ -157,7 +157,7 @@ pub fn generate(
 ) GenerateSymbolError!Result {
     _ = debug_output;
 
-    const memory = Memory.init(bin_file.options.target, bin_file);
+    const memory = AddressableMemory.init(bin_file.options.target, bin_file);
     var func = Func{
         .bin_file = bin_file,
         .src_loc = src_loc,
@@ -417,7 +417,7 @@ fn takeReg(func: *Func, reg: Register, maybe_inst: ?Air.Inst.Index) MV {
 }
 
 /// This represents the system's addressable memory where each byte has an address.
-const Memory = struct {
+const AddressableMemory = struct {
     /// Memory addresses in the first page of memory available for storage.
     /// This is expensive, sparsely available memory and very valuable because
     /// writing and reading from it is faster than for absolute memory.
@@ -449,7 +449,7 @@ const Memory = struct {
     //       problem was that it couldn't guarantee 2 contiguous addresses even if we had them once.
     zp_res: ?[2]u8,
 
-    fn init(target: std.Target, bin_file: *link.File) Memory {
+    fn init(target: std.Target, bin_file: *link.File) AddressableMemory {
         if (bin_file.cast(link.File.Prg)) |prg| {
             if (prg.zp_free != null and prg.abs_offset != null and prg.zp_res != null) {
                 // TODO: encapsulate into MemoryState or something and or require the linker to have a
@@ -465,7 +465,7 @@ const Memory = struct {
 
         const zp_free = abi.getZeroPageAddresses(target);
         const abs_offset = abi.getAbsoluteMemoryOffset(target);
-        var memory = Memory{
+        var memory = AddressableMemory{
             .zp_free = zp_free,
             .abs_offset = abs_offset,
             .zp_res = undefined,
@@ -479,15 +479,15 @@ const Memory = struct {
 
     ///// Allocates two bytes specifically from the zero page for the purpose of storing a pointer address and dereferencing that pointer.
     //// TODO: unused; remove
-    //fn allocZeroPageDerefAddress(memory: *Memory) !MV {
+    //fn allocZeroPageDerefAddress(memory: *AddressableMemory) !MV {
     //    if (memory.allocZeroPageMemory(2)) |addr|
     //        return addr;
-    //    const func = @fieldParentPtr(Func, "memory", memory);
+    //    const func = @fieldParentPtr(Func, "addr_mem", memory);
     //    return func.fail("unable to dereference pointer due to zero page shortage", .{});
     //}
 
     /// Preserves the current memory state for the next function's codegen.
-    fn preserve(memory: *Memory) void {
+    fn preserve(memory: *AddressableMemory) void {
         // here we're tackling a problem unique to the 6502 of all backends:
         // while the other codegen backends use the hardware stack and their registers for storing everything
         // and that works fine for them because their stack is much bigger,
@@ -496,7 +496,7 @@ const Memory = struct {
         // that memory is global rather than stack-local so we have to preserve the memory state
         // across function codegens.
         // any next function can simply continue with this memory state.
-        const func = @fieldParentPtr(Func, "memory", memory);
+        const func = @fieldParentPtr(Func, "addr_mem", memory);
         if (func.bin_file.cast(link.File.Prg)) |prg| {
             prg.abs_offset = memory.abs_offset;
             prg.zp_free = memory.zp_free;
@@ -506,7 +506,7 @@ const Memory = struct {
 
     /// Returns a memory address pointing to the start of the newly-allocated amount of bytes.
     /// Returns either MV.zp or MV.abs.
-    fn alloc(memory: *Memory, byte_count: u16) !MV {
+    fn alloc(memory: *AddressableMemory, byte_count: u16) !MV {
         log.debug("allocating {} bytes", .{byte_count});
 
         const use_zero_page =
@@ -531,7 +531,7 @@ const Memory = struct {
 
         // OOM
         // TODO: test this error
-        const func = @fieldParentPtr(Func, "memory", memory);
+        const func = @fieldParentPtr(Func, "addr_mem", memory);
         var depleted_total: u16 = 0;
         const zp_free = abi.getZeroPageAddresses(func.getTarget());
         depleted_total += @intCast(u8, zp_free.len);
@@ -542,7 +542,7 @@ const Memory = struct {
 
     /// Allocates contiguous zero page memory of the given size and returns a start address to the first byte.
     /// Returns null if OOM or if no contiguous bytes were found.
-    fn allocZeroPageMemory(memory: *Memory, byte_count: u16) ?u8 {
+    fn allocZeroPageMemory(memory: *AddressableMemory, byte_count: u16) ?u8 {
         assert(byte_count != 0);
 
         std.debug.print("zp_free BEFORE: {any}\n", .{memory.zp_free.constSlice()});
@@ -599,7 +599,7 @@ const Memory = struct {
 
     /// Allocates contiguous absolute memory of the given size and returns a start address to the first byte.
     /// Returns null if OOM.
-    fn allocAbsoluteMemory(memory: *Memory, byte_count: u16) ?u16 {
+    fn allocAbsoluteMemory(memory: *AddressableMemory, byte_count: u16) ?u16 {
         assert(byte_count != 0);
         // TODO:
         //if (addr == abs.abs_end) {
@@ -609,8 +609,8 @@ const Memory = struct {
         return memory.abs_offset + 1;
     }
 
-    fn free(memory: *Memory, val: MV, ty: Type) void {
-        const func = @fieldParentPtr(Func, "memory", memory);
+    fn free(memory: *AddressableMemory, val: MV, ty: Type) void {
+        const func = @fieldParentPtr(Func, "addr_mem", memory);
         const byte_size = func.getByteSize(ty).?;
         log.debug("freeing {} bytes from {}", .{ byte_size, val });
         std.debug.print("zp_free BEFORE: {any}\n", .{memory.zp_free.constSlice()});
@@ -635,7 +635,7 @@ const Memory = struct {
     test allocZeroPageMemory {
         var zp_free = std.BoundedArray(u8, 256){};
         zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 1, 2, 4, 5, 0x80, 0x90 });
-        var memory = Memory{
+        var memory = AddressableMemory{
             .zp_free = zp_free,
             .abs_offset = undefined,
             .zp_res = undefined,
@@ -702,7 +702,7 @@ const Memory = struct {
     }
 
     test allocAbsoluteMemory {
-        var memory = Memory{
+        var memory = AddressableMemory{
             .zp_free = undefined,
             .abs_offset = 0xffff,
             //.abs_end = 0xfeff,
@@ -720,7 +720,7 @@ const Memory = struct {
 
 // TODO: are these tests run as part of `zig build test`?
 comptime {
-    _ = Memory;
+    _ = AddressableMemory;
 }
 
 const Branch = struct {
@@ -731,7 +731,7 @@ const Branch = struct {
     }
 };
 
-fn currentBranch(func: *Func) *Branch {
+fn getCurrentBranch(func: *Func) *Branch {
     return &func.branches.items[func.branches.items.len - 1];
 }
 
@@ -826,7 +826,7 @@ fn gen(func: *Func) !void {
 
     try func.genBody(func.air.getMainBody());
 
-    func.memory.preserve();
+    func.addr_mem.preserve();
 
     log.debug("MIR generated for this function:", .{});
     var i: u16 = 0;
@@ -1409,7 +1409,7 @@ fn airRetPtr(func: *Func, inst: Air.Inst.Index) !void {
 /// Allocates addressable memory capable of storing a value of the given type.
 fn allocMem(func: *Func, ty: Type) !MV {
     const byte_size = func.getByteSize(ty) orelse return func.fail("type `{}` too big to fit in address space", .{ty.fmt(func.getMod())});
-    const val = try func.memory.alloc(byte_size);
+    const val = try func.addr_mem.alloc(byte_size);
     log.debug("allocated to {}", .{val});
     return val;
 }
@@ -1566,7 +1566,7 @@ fn airIntCast(func: *Func, inst: Air.Inst.Index) !void {
         const dst_byte_size = func.getByteSize(dst_ty).?;
 
         if (operand_size == 1 and dst_byte_size == 2) {
-            // TODO: func.memory.realloc if possible so that we can reuse the existing allocation and just add a zero byte?
+            // TODO: func.addr_mem.realloc if possible so that we can reuse the existing allocation and just add a zero byte?
             const res = try func.allocMem(Type.usize);
             try func.trans(operand, res.index(0), Type.u8, Type.u8);
             try func.trans(.{ .imm = 0 }, res.index(1), Type.u8, Type.u8);
@@ -1728,7 +1728,7 @@ fn airArrayElemVal(func: *Func, inst: Air.Inst.Index) !void {
                         //     rts
                         // ```
                         assert(child_byte_size == 1); // TODO (runtime mul)
-                        const res = .{ .zp = (func.memory.zp_res orelse return func.fail("unable to dereference pointer due to zero page shortage", .{}))[0] };
+                        const res = .{ .zp = (func.addr_mem.zp_res orelse return func.fail("unable to dereference pointer due to zero page shortage", .{}))[0] };
                         const addr = .{ .abs_imm = array.abs }; // TODO
                         const res2 = try func.intBinOp(addr, index, Type.usize, .add, res, null);
                         assert(res.zp == res2.zp);
@@ -2104,7 +2104,7 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
         return func.lowerDeclRef(val, ty, decl_index);
     }
 
-    // try lowering the constant to a Memory Value for efficiency.
+    // try lowering the constant to a MemoryValue for efficiency.
     // if it does not fit, fall through and let the other logic handle it.
     const target = func.getTarget();
     switch (ty.zigTypeTag()) {
@@ -2155,7 +2155,7 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
         => {},
     }
 
-    // it is not representable as a Memory Value so emit it to a read-only section in the binary
+    // it is not representable as a MemoryValue so emit it to a read-only section in the binary
     return try func.lowerUnnamedConst(val, ty);
 }
 
@@ -2272,7 +2272,7 @@ fn processDeath(func: *Func, op: Air.Inst.Index, res: MV) void {
                 .Pointer => ty.childType(),
                 else => ty,
             };
-            func.memory.free(dead, child_ty);
+            func.addr_mem.free(dead, child_ty);
         },
         .reg => |reg| switch (reg) {
             .a => func.reg_a = null,
@@ -2466,7 +2466,7 @@ fn addInstAny(func: *Func, comptime mnemonic: []const u8, val: MV) !void {
         .none => try func.addInstImpl(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_impl").?),
         .imm => |imm| try func.addInstImm(std.meta.stringToEnum(Mir.Inst.Tag, mnemonic ++ "_imm").?, imm),
         .reg => {
-            const temp = .{ .zp = (func.memory.zp_res orelse return func.fail("zero page depleted", .{}))[0] };
+            const temp = .{ .zp = (func.addr_mem.zp_res orelse return func.fail("zero page depleted", .{}))[0] };
             try func.trans(val, temp, Type.u8, Type.u8);
             try func.addInstAny(mnemonic, temp);
         },
@@ -2477,7 +2477,7 @@ fn addInstAny(func: *Func, comptime mnemonic: []const u8, val: MV) !void {
 }
 
 /// Returns a pointer to the last MIR instruction added.
-fn currentInst(func: *Func) struct { tag: *Mir.Inst.Tag, data: *Mir.Inst.Data } {
+fn getCurrentInst(func: *Func) struct { tag: *Mir.Inst.Tag, data: *Mir.Inst.Data } {
     return .{
         .tag = &func.mir_instructions.items(.tag)[func.mir_instructions.len - 1],
         .data = &func.mir_instructions.items(.data)[func.mir_instructions.len - 1],
