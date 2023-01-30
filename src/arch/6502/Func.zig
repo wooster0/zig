@@ -13,10 +13,6 @@
 //! * https://llx.com/Neil/a2/opcodes.html
 //! * https://dustlayer.com/news
 //! * https://github.com/KaiSandstrom/C64-Minesweeper
-//!
-//! We make use of two stacks:
-//! * The hardware stack which is limited and we only use for function calls and temporarily preserving registers during transfer operations.
-//! * The software stack which is used for allocating memory because it is much bigger than the hardware stack.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -370,7 +366,7 @@ fn freeReg(func: *Func, reg: Register, maybe_inst: ?Air.Inst.Index) !MV {
             const new_home = try func2.allocMem(Type.u8);
             log.debug("spilling register {} into {}", .{ reg2, new_home });
             try func2.trans(val, new_home, Type.u8, Type.u8);
-            func2.currentBranch().inst_vals.putAssumeCapacity(inst, new_home);
+            func2.getCurrentBranch().inst_vals.putAssumeCapacity(inst, new_home);
         }
     }.spillReg;
 
@@ -381,7 +377,7 @@ fn freeReg(func: *Func, reg: Register, maybe_inst: ?Air.Inst.Index) !MV {
                     assert(inst != old_inst); // TODO: can it happen that they're the same? in that case don't spill
                 // TODO: use PHA and PLA to spill using the hardware stack?
                 //       for that we very likely have to introduce a new MemoryValue that says
-                //       the value has to be PLA'd first.
+                //       the value has to be PLA'd first (MemoryValue.stack).
                 //       also, can we TXA and TYA below and do it there too? measure total cycles of each solution
                 try spillReg(func, reg, old_inst);
             }
@@ -421,8 +417,6 @@ fn takeReg(func: *Func, reg: Register, maybe_inst: ?Air.Inst.Index) MV {
 }
 
 /// This represents the system's addressable memory where each byte has an address.
-// TODO: move this to Memory.zig or better even AddressableMemory.zig.
-//       and maybe rename bits.zig to regs.zig
 const Memory = struct {
     /// Memory addresses in the first page of memory available for storage.
     /// This is expensive, sparsely available memory and very valuable because
@@ -1356,7 +1350,7 @@ fn intBinOp(
             if (true) panic("TODO: actually implement saturation", .{});
             assert(func.getByteSize(ty).? <= 127);
             try func.addInstRel(.bcc_rel, undefined);
-            const bcc = func.currentInst();
+            const bcc = func.getCurrentInst();
             const size_before = func.getSize();
             switch (op) {
                 //.add_sat => func.trans(ty.maxInt(func.getAllocator(), func.getTarget()), res, ty, ty),
@@ -2230,7 +2224,7 @@ const BigTomb = struct {
         // TODO: check `liveness.isUnused` here?
         const is_used = !big_tomb.func.liveness.isUnused(big_tomb.inst);
         if (is_used) {
-            big_tomb.func.currentBranch().inst_vals.putAssumeCapacityNoClobber(big_tomb.inst, res);
+            big_tomb.func.getCurrentBranch().inst_vals.putAssumeCapacityNoClobber(big_tomb.inst, res);
         }
 
         if (debug.runtime_safety)
@@ -2251,7 +2245,7 @@ fn iterateBigTomb(func: *Func, inst: Air.Inst.Index, operand_count: usize) !BigT
 
 /// Ensures that we are able to process the upcoming deaths of this many additional operands.
 fn ensureProcessDeathCapacity(func: *Func, additional_count: usize) !void {
-    try func.currentBranch().inst_vals.ensureUnusedCapacity(func.getAllocator(), additional_count);
+    try func.getCurrentBranch().inst_vals.ensureUnusedCapacity(func.getAllocator(), additional_count);
 }
 
 /// Processes the death of a liveness operand of an AIR instruction.
@@ -2312,7 +2306,7 @@ fn finishAir(func: *Func, inst: Air.Inst.Index, res: MV, ops: []const Air.Inst.R
     // the MSB is whether the instruction is unreferenced
     const is_used = @truncate(u1, tomb_bits) == 0;
     if (is_used) {
-        func.currentBranch().inst_vals.putAssumeCapacityNoClobber(inst, res);
+        func.getCurrentBranch().inst_vals.putAssumeCapacityNoClobber(inst, res);
     }
 
     if (debug.runtime_safety)

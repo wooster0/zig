@@ -65,13 +65,17 @@ pub const Inst = struct {
     /// * Y-indexed zero page (y_zp):
     ///   Value is read from zero page address formed by adding Y to the one-byte operand.
     /// * X-indexed indirect zero page (x_ind_zp):
-    ///   Value is read from zero page address formed by adding X to the one-byte operand and reading from that.
+    ///   The X register's value is added to the one-byte operand resulting in a zero page address
+    ///   from which a two-byte address is read from which the value is read.
     ///   This allows dereferencing pointers.
+    ///   The zero page boundary is never crossed.
     /// * Indirect Y-indexed zero page (ind_y_zp):
-    ///   Value is read from zero page address formed by reading from the one-byte operand and adding Y to that.
+    ///   A 2-byte address is from the given zero page address, the Y register's value is added to the 2-byte address
+    ///   and then the value is read from that address.
     ///   This allows dereferencing pointers.
+    ///   The zero page boundary is never crossed.
     /// * Relative (rel):
-    ///   TODO: figure this out. apparently these only take a single byte as the operand and you can only jump so far away?
+    ///   The operand is a signed byte that is added to the program counter, which allows jumping relatively +-128 bytes from the instruction following this one.
     ///
     // Design decision note:
     // Because the layout of an instruction byte is supposedly in the form of
