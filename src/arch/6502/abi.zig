@@ -2,9 +2,11 @@ const std = @import("std");
 const bits = @import("bits.zig");
 const Register = bits.Register;
 
+// TODO: provide access to the zero page and absolute memory through `addrspace`s
+
 /// Returns operating system-specific zero page addresses that we are free to use for any purpose.
 pub fn getZeroPageAddresses(target: std.Target) std.BoundedArray(u8, 256) {
-    // memory maps are used to find this data
+    // Memory maps are used to find this data.
 
     var addrs = std.BoundedArray(u8, 256){};
     // TODO: this is how they do it in LLVM-MOS:
@@ -19,7 +21,7 @@ pub fn getZeroPageAddresses(target: std.Target) std.BoundedArray(u8, 256) {
             );
         },
         .freestanding => {
-            // assume everything is free
+            // Assume everything is free.
             var i: u8 = 0;
             while (i < 256) : (i += 1)
                 addrs.appendAssumeCapacity(i);
@@ -31,10 +33,11 @@ pub fn getZeroPageAddresses(target: std.Target) std.BoundedArray(u8, 256) {
 
 pub fn getAbsoluteMemoryOffset(target: std.Target) u16 {
     return switch (target.os.tag) {
-        // end of the BASIC area
+        // End of the BASIC area.
         .c64 => 0x9FFF,
-        // this is before the three vectors at the top of the address space (NMI, RESET, IRQ/BRK),
-        // each taking up 2 bytes: https://www.pagetable.com/?p=410
+        // This is before the three vectors at the top of the address space (NMI, RESET, IRQ/BRK),
+        // each taking up 2 bytes.
+        // Reference: https://www.pagetable.com/?p=410
         .freestanding => 0xFFFF - 3 * 2,
         else => unreachable,
     };

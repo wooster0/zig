@@ -134,9 +134,10 @@ fn wWinMainCRTStartup2() callconv(.C) noreturn {
 }
 
 fn c64_start() callconv(.C) void {
-    // TODO: always inline `main` once that no longer makes the binary contain main's code twice
+    // TODO: `@call(.always_inline, root.main, .{});` once that no longer causes main's code to be
+    //       included in the binary twice
     root.main();
-    return; // the RTS generated for this will also exit the program
+    // Returning from here will also exit the program.
 }
 
 fn exit2(code: usize) noreturn {
