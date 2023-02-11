@@ -9,7 +9,7 @@ const debug = std.debug;
 const assert = debug.assert;
 const testing = std.testing;
 const bits = @import("bits.zig");
-const Register = bits.Register;
+const Reg = bits.Reg;
 
 const Mir = @This();
 
@@ -35,6 +35,7 @@ pub const Inst = struct {
     // With our current design it takes only 3 bytes for each instruction because PHA
     // has an implied operand and thus takes no additional data (`Data.none`).
     // This is all possible thanks to `std.MultiArrayList`.
+    // TODO: rename these fields to opcode and operand? as well as the structs/unions
     /// The instruction's opcode.
     tag: Tag,
     /// The instruction's operand with an addressing mode.
@@ -46,35 +47,35 @@ pub const Inst = struct {
     /// The 6502 has 151 unique instructions. Organized into addressing modes, it has 56 instructions.
     ///
     /// We recognize the following addressing modes:
-    /// * Implied (impl):
+    /// * Implied (impl) (e.g. `BRK`):
     ///   The operand, if any, is implicitly stated in the operation code of the instruction itself.
-    /// * Immediate (imm):
+    /// * Immediate (imm) (e.g. `LDA #4`):
     ///   Value is the one-byte operand.
-    /// * Absolute (abs):
+    /// * Absolute (abs) (e.g. `LDA $6502`):
     ///   Value is read from absolute address as the two-byte operand.
-    /// * X-indexed absolute (x_abs):
+    /// * X-indexed absolute (x_abs) (e.g. `LDA $6502, X`):
     ///   Value is read from absolute address formed by adding the X register to the two-byte operand.
-    /// * Y-indexed absolute (y_abs):
+    /// * Y-indexed absolute (y_abs) (e.g. `LDA $6502, Y`):
     ///   Value is read from absolute address formed by adding the Y register to the two-byte operand.
-    /// * Indirect absolute (ind_abs):
+    /// * Indirect absolute (ind_abs) (e.g. `JMP ($6502)`):
     ///   Value is read from absolute address read from the given address.
-    /// * Zero page (zp):
+    /// * Zero page (zp) (e.g. `LDA $65`):
     ///   Value is read from zero page address.
-    /// * X-indexed zero page (x_zp):
+    /// * X-indexed zero page (x_zp) (e.g. `LDA $65, X`):
     ///   Value is read from zero page address formed by adding X to the one-byte operand.
-    /// * Y-indexed zero page (y_zp):
+    /// * Y-indexed zero page (y_zp) (e.g. `LDA $65, Y`):
     ///   Value is read from zero page address formed by adding Y to the one-byte operand.
-    /// * X-indexed indirect zero page (x_ind_zp):
+    /// * X-indexed indirect zero page (x_ind_zp) (e.g. `LDA ($65, X)`):
     ///   The X register's value is added to the one-byte operand resulting in a zero page address
     ///   from which a two-byte address is read from which the value is read.
     ///   This allows dereferencing pointers.
     ///   The zero page boundary is never crossed.
-    /// * Indirect Y-indexed zero page (ind_y_zp):
+    /// * Indirect Y-indexed zero page (ind_y_zp) (e.g. `LDA ($65), Y`):
     ///   A 2-byte address is from the given zero page address, the Y register's value is added to the 2-byte address
     ///   and then the value is read from that address.
     ///   This allows dereferencing pointers.
     ///   The zero page boundary is never crossed.
-    /// * Relative (rel):
+    /// * Relative (rel) (e.g. `BEQ $40`):
     ///   The operand is a signed byte that is added to the program counter, which allows jumping relatively +-128 bytes from the instruction following this one.
     ///
     // Design decision note:
@@ -89,8 +90,8 @@ pub const Inst = struct {
     // In that case `checkCombo` would need a gigantic `switch` checking each combo manually,
     // or we would simply not have that kind of safety.
     pub const Tag = enum(u8) {
-        // each tag name must be the opcode's mnemonic plus the addressing mode as a suffix.
-        // instructions are sorted by opcode.
+        // The tag name must be the opcode's mnemonic followed by the addressing mode as a suffix.
+        // Instructions are sorted by opcode.
         // zig fmt: off
         brk_impl     = 0x00, // BRK          ; BReaK
         clc_impl     = 0x18, // CLC          ; CLear Carry
@@ -106,6 +107,7 @@ pub const Inst = struct {
         adc_ind_y_zp = 0x71, // ADC ($XX), Y ; ADd with Carry
         adc_x_ind_zp = 0x75, // ADC ($XX, X) ; ADd with Carry
         adc_x_abs    = 0x7D, // ADC $XXXX, X ; ADd with Carry
+        sta_x_ind_zp = 0x81, // STA ($XX, X) ; STore A
         sty_zp       = 0x84, // STY $XX      ; STore Y
         sta_zp       = 0x85, // STA $XX      ; STore A
         stx_zp       = 0x86, // STX $XX      ; STore X
@@ -113,6 +115,8 @@ pub const Inst = struct {
         sty_abs      = 0x8C, // STY $XXXX    ; STore Y
         sta_abs      = 0x8D, // STA $XXXX    ; STore A
         stx_abs      = 0x8E, // STX $XXXX    ; STore X
+        bcc_rel      = 0x90, // BCC $XX      ; Branch on Carry Clear
+        sta_ind_y_zp = 0x91, // STA ($XX), Y ; STore A
         tya_impl     = 0x98, // TYA          ; Transfer Y to A
         ldy_imm      = 0xA0, // LDY #$XX     ; LoaD Y
         lda_x_ind_zp = 0xA1, // LDX ($XX, X) ; LoaD X
@@ -123,7 +127,10 @@ pub const Inst = struct {
         tay_impl     = 0xA8, // TAY          ; Transfer A to Y
         lda_imm      = 0xA9, // LDA #$XX     ; LoaD A
         tax_impl     = 0xAA, // TAX          ; Transfer A to X
+        ldy_abs      = 0xAC, // LDY $XXXX    ; LoaD Y
         lda_abs      = 0xAD, // LDA $XXXX    ; LoaD A
+        ldx_abs      = 0xAE, // LDX $XXXX    ; LoaD X
+        lda_ind_y_zp = 0xB1, // LDA ($XX), Y ; LoaD A
         lda_x_abs    = 0xBD, // STA $XXXX, X ; STore A
         cld_impl     = 0xD8, // CLD          ; CLear Decimal
         sbc_zp       = 0xE5, // SBC $XX      ; SuBtract with Carry
@@ -133,30 +140,28 @@ pub const Inst = struct {
         sed_impl     = 0xF8, // SED          ; SEt Decimal
         // zig fmt: on
 
+        /// Returns the opcode's mnemonic in lowercase.
         fn getOpcodeMnemonic(tag: Tag) []const u8 {
             var parts = mem.split(u8, @tagName(tag), "_");
             return parts.first();
         }
 
-        pub fn getAddressingMode(tag: Tag) []const u8 {
+        const AddrMode = enum { impl, imm, abs, x_abs, y_abs, ind_abs, zp, x_zp, y_zp, x_ind_zp, ind_y_zp, rel };
+        /// Returns the opcode's addressing mode.
+        pub fn getAddrMode(tag: Tag) AddrMode {
             var parts = mem.split(u8, @tagName(tag), "_");
             _ = parts.first();
-            const two = parts.next().?;
-            if (parts.next()) |three| {
-                if (parts.next()) |four| {
-                    return four;
-                } else {
-                    return three;
-                }
-            } else {
-                return two;
-            }
+            return std.meta.stringToEnum(AddrMode, parts.rest()).?;
         }
 
+        // TODO: rename to `getAffected` and add `.mem` as another possibility and start tracking
+        //       all of addressable memory (all zp and abs addresses) to optimize out ST* instructions etc.?
+        //       in that case start tracking the status register through this too: `.stat`.
+        //       this function basically tells us about the semantics of an opcode.
         /// Returns the register that could be affected by the execution of this opcode,
         /// excluding the status register.
         /// "Could" because a register's value might stay the same after execution of this opcode.
-        pub fn getAffectedRegister(tag: Tag) ?Register {
+        pub fn getAffectedReg(tag: Tag) ?Reg {
             return switch (tag) {
                 .brk_impl => null,
                 .clc_impl => null,
@@ -172,6 +177,7 @@ pub const Inst = struct {
                 .adc_ind_y_zp => .a,
                 .adc_x_ind_zp => .a,
                 .adc_x_abs => .a,
+                .sta_x_ind_zp => null,
                 .sty_zp => null,
                 .sta_zp => null,
                 .stx_zp => null,
@@ -179,6 +185,8 @@ pub const Inst = struct {
                 .sty_abs => null,
                 .sta_abs => null,
                 .stx_abs => null,
+                .bcc_rel => null,
+                .sta_ind_y_zp => null,
                 .tya_impl => .a,
                 .ldy_imm => .y,
                 .lda_x_ind_zp => .a,
@@ -189,7 +197,10 @@ pub const Inst = struct {
                 .tay_impl => .y,
                 .lda_imm => .a,
                 .tax_impl => .x,
+                .ldy_abs => .y,
                 .lda_abs => .a,
+                .ldx_abs => .x,
+                .lda_ind_y_zp => .a,
                 .lda_x_abs => .a,
                 .cld_impl => null,
                 .sbc_zp => .a,
@@ -204,12 +215,14 @@ pub const Inst = struct {
             try testing.expectEqualStrings("nop", getOpcodeMnemonic(.nop_impl));
             try testing.expectEqualStrings("lda", getOpcodeMnemonic(.lda_x_abs));
             try testing.expectEqualStrings("sta", getOpcodeMnemonic(.sta_zp));
+            try testing.expectEqualStrings("jmp", getOpcodeMnemonic(.jmp_abs));
         }
 
-        test getAddressingMode {
-            try testing.expectEqualStrings("impl", getAddressingMode(.clc_impl));
-            try testing.expectEqualStrings("abs", getAddressingMode(.lda_abs));
-            try testing.expectEqualStrings("zp", getAddressingMode(.adc_x_ind_zp));
+        test getAddrMode {
+            try testing.expectEqual(AddrMode.impl, getAddrMode(.clc_impl));
+            try testing.expectEqual(AddrMode.abs, getAddrMode(.lda_abs));
+            try testing.expectEqual(AddrMode.x_ind_zp, getAddrMode(.adc_x_ind_zp));
+            try testing.expectEqual(AddrMode.x_abs, getAddrMode(.lda_x_abs));
         }
     };
 
@@ -218,28 +231,48 @@ pub const Inst = struct {
     pub const Data = union {
         /// The operand, if any, is implied.
         none: void,
+        // TODO: simplify to `byte: u8` and `word: u16`.
+        //       that would make it more distinct from MV, too.
         /// The value is immediately available.
         imm: u8,
         /// A zero page memory address.
         zp: u8,
         /// An absolute memory address.
-        abs: AbsoluteAddress,
+        abs: AbsAddr,
+        /// A relative jump offset.
+        rel: i8,
+    };
+
+    /// An unknown absolute memory address that is yet to be resolved by the linker.
+    pub const UnresAbsAddr = struct {
+        /// The index of the block that we want to know the absolute memory address of.
+        block_index: u16,
+        /// This is to be added to the absolute memory address once it is resolved.
+        /// This might represent an index or an offset into the data.
+        addend: u16 = 0,
+
+        pub fn index(unres_abs_addr: UnresAbsAddr, offset: u16) UnresAbsAddr {
+            assert(unres_abs_addr.addend == 0); // Unresolved absolute addresses should be indexed only once.
+            return .{ .block_index = unres_abs_addr.block_index, .addend = offset };
+        }
     };
 
     // TODO: use `extra` for this?
-    pub const AbsoluteAddress = union(enum) {
-        /// The address is known and immediately available.
-        imm: u16,
+    pub const AbsAddr = union(enum) {
+        /// The address is known and fixed and does not change.
+        // Design decision note: "const" is a keyword and "static" is one letter longer.
+        //                       "resolved" is a bad because it was never unresolved to begin with.
+        fixed: u16,
         /// The absolute memory address is unknown and yet to be resolved by the linker.
-        unresolved: struct {
-            blk_i: u16,
-            offset: u16 = 0,
-        },
-        /// The current address of this word subtracted by the given offset.
-        current: struct {
-            decl_index: @import("../../Module.zig").Decl.Index,
-            offset: u16,
-        },
+        // Design decision note: "block" is too specific of a name.
+        unres: UnresAbsAddr,
+        ///// The current address of this word subtracted by the given offset.
+        //current: struct {
+        //    // TODO: decl_i
+        //    //decl_index: @import("../../Module.zig").Decl.Index,
+        //    // TODO: this and all other identifiers to "off"
+        //    offset: u16,
+        //},
     };
 
     /// Checks this combination of tag (opcode) and data (addressing mode) and makes sure it evaluates to a valid instruction.
@@ -249,31 +282,95 @@ pub const Inst = struct {
     /// the union value is comptime-known, so instead we use anonymous structs and check
     /// that the field name matches the addressing mode suffix of the opcode tag.
     pub fn checkCombo(tag: Tag, data: anytype) void {
-        const addr_mode = tag.getAddressingMode();
+        const addr_mode = tag.getAddrMode();
         const data_ty = @TypeOf(data);
-        if (@hasField(data_ty, "none")) {
-            assert(mem.eql(u8, addr_mode, "impl"));
-        } else if (@hasField(data_ty, "imm")) {
-            assert(mem.eql(u8, addr_mode, "imm"));
-        } else if (@hasField(data_ty, "zp")) {
-            assert(mem.eql(u8, addr_mode, "zp"));
-        } else if (@hasField(data_ty, "abs")) {
-            assert(mem.eql(u8, addr_mode, "abs"));
-        } else unreachable;
+        if (data_ty == Data) {
+            switch (addr_mode) {
+                .impl => _ = data.none,
+                .imm => _ = data.imm,
+                .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => _ = data.zp,
+                .abs, .x_abs, .y_abs, .ind_abs => {
+                    _ = data.abs;
+                    if (data.abs == .fixed)
+                        assert(data.abs.fixed > 0xFF); // On failure, use a single byte operand instead.
+                },
+                .rel => _ = data.rel,
+            }
+        } else {
+            switch (addr_mode) {
+                .impl => assert(@hasField(data_ty, "none")),
+                .imm => assert(@hasField(data_ty, "imm")),
+                .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => assert(@hasField(data_ty, "zp")),
+                .abs, .x_abs, .y_abs, .ind_abs => {
+                    assert(@hasField(data_ty, "abs"));
+                    if (@hasField(data_ty, "abs")) {
+                        if (@hasField(@TypeOf(@field(data, "abs")), "fixed")) {
+                            assert(@field(@field(data, "abs"), "fixed") > 0xFF); // On failure, use a single byte operand instead.
+                        }
+                    }
+                },
+                .rel => assert(@hasField(data_ty, "rel")),
+            }
+        }
     }
 
     /// Returns the size of this instruction, including opcode and operand.
     pub fn getByteSize(inst: Inst) u2 {
-        const addr_mode = inst.tag.getAddressingMode();
-        if (mem.eql(u8, addr_mode, "impl")) {
-            return 1;
-        } else if (mem.eql(u8, addr_mode, "imm")) {
-            return 2;
-        } else if (mem.eql(u8, addr_mode, "zp")) {
-            return 2;
-        } else if (mem.eql(u8, addr_mode, "abs")) {
-            return 3;
-        } else unreachable;
+        checkCombo(inst.tag, inst.data);
+        const addr_mode = inst.tag.getAddrMode();
+        const operand_size: u2 = switch (addr_mode) {
+            .impl => 0,
+            .imm => 1,
+            .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => 1,
+            .abs, .x_abs, .y_abs, .ind_abs => 2,
+            .rel => 1,
+        };
+        const opcode_size = @sizeOf(Tag);
+        return opcode_size + operand_size;
+    }
+
+    /// Returns an all-uppercase assembly text code representation of this instruction.
+    /// Uses decimal for immediate values < 10; hexadecimal otherwise. (TODO: or probably just always use hex)
+    // TODO: use this for -femit-asm once we can
+    pub fn getTextRepr(inst: Inst, buf: *[20]u8) []const u8 {
+        checkCombo(inst.tag, inst.data);
+        const addr_mode = inst.tag.getAddrMode();
+        var opcode_mnemonic_buf: [3]u8 = undefined;
+        const opcode_mnemonic = std.ascii.upperString(&opcode_mnemonic_buf, inst.tag.getOpcodeMnemonic());
+        const prefix = switch (addr_mode) {
+            .zp, .abs => "",
+            .x_zp, .y_zp, .x_abs, .y_abs => "",
+            .x_ind_zp, .ind_y_zp => "(",
+            .ind_abs => "(",
+            else => undefined,
+        };
+        const suffix = switch (addr_mode) {
+            .zp, .abs => "",
+            .x_zp, .x_abs => ", X",
+            .y_zp, .y_abs => ", Y",
+            .x_ind_zp => ", X)",
+            .ind_y_zp => "), Y",
+            .ind_abs => "",
+            else => undefined,
+        };
+        const slice = switch (addr_mode) {
+            .impl => std.fmt.bufPrint(buf, "{s}", .{opcode_mnemonic}),
+            .imm => imm: {
+                const imm = inst.data.imm;
+                break :imm if (imm < 0xA)
+                    std.fmt.bufPrint(buf, "{s} #{d}", .{ opcode_mnemonic, imm })
+                else
+                    std.fmt.bufPrint(buf, "{s} #${X:0>2}", .{ opcode_mnemonic, imm });
+            },
+            .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => std.fmt.bufPrint(buf, "{s} {s}${X:0>2}{s}", .{ opcode_mnemonic, prefix, inst.data.zp, suffix }),
+            .abs, .x_abs, .y_abs, .ind_abs => switch (inst.data.abs) {
+                .fixed => |addr| std.fmt.bufPrint(buf, "{s} {s}${X:0>4}{s}", .{ opcode_mnemonic, prefix, addr, suffix }),
+                .unres => |unres| std.fmt.bufPrint(buf, "{s} {s}$???? + {d}{s}", .{ opcode_mnemonic, prefix, unres.addend, suffix }),
+                //.current => @panic("TODO"),
+            },
+            .rel => std.fmt.bufPrint(buf, "{s} {c}{d}", .{ opcode_mnemonic, @as(u8, if (inst.data.rel < 0) '-' else '+'), inst.data.rel }),
+        };
+        return slice catch unreachable;
     }
 
     // TODO: function for calculating a program's total exact cycles? and execution time using hertz
@@ -282,14 +379,32 @@ pub const Inst = struct {
         Inst.checkCombo(.rts_impl, .{ .none = {} });
         Inst.checkCombo(.lda_imm, .{ .imm = .{ .imm = 0x10 } });
         Inst.checkCombo(.lda_zp, .{ .zp = .{ .zp = 0x00 } });
-        Inst.checkCombo(.jsr_abs, .{ .abs = .{ .imm = 0xFFD2 } });
+        Inst.checkCombo(.jsr_abs, .{ .abs = .{ .fixed = 0xFFD2 } });
     }
 
     test getByteSize {
+        try testing.expectEqual(@as(u2, 1), getByteSize(.{ .tag = .nop_impl, .data = .{ .none = {} } }));
         try testing.expectEqual(@as(u2, 1), getByteSize(.{ .tag = .brk_impl, .data = .{ .none = {} } }));
         try testing.expectEqual(@as(u2, 2), getByteSize(.{ .tag = .adc_imm, .data = .{ .imm = 0x20 } }));
         try testing.expectEqual(@as(u2, 2), getByteSize(.{ .tag = .adc_x_ind_zp, .data = .{ .zp = 0x40 } }));
         try testing.expectEqual(@as(u2, 2), getByteSize(.{ .tag = .sty_zp, .data = .{ .zp = 0xFF } }));
+        try testing.expectEqual(@as(u2, 3), getByteSize(.{ .tag = .lda_x_abs, .data = .{ .abs = .{ .fixed = 0xABCD } } }));
+        try testing.expectEqual(@as(u2, 3), getByteSize(.{ .tag = .lda_abs, .data = .{ .abs = .{ .fixed = 0x0801 } } }));
+    }
+
+    test getTextRepr {
+        var buf: [20]u8 = undefined;
+        try testing.expectEqualStrings("NOP", getTextRepr(.{ .tag = .nop_impl, .data = .{ .none = {} } }, &buf));
+        try testing.expectEqualStrings("LDA #4", getTextRepr(.{ .tag = .lda_imm, .data = .{ .imm = 4 } }, &buf));
+        try testing.expectEqualStrings("LDA #$0F", getTextRepr(.{ .tag = .lda_imm, .data = .{ .imm = 0x0F } }, &buf));
+        try testing.expectEqualStrings("LDA $EE", getTextRepr(.{ .tag = .lda_zp, .data = .{ .zp = 0xEE } }, &buf));
+        try testing.expectEqualStrings("STA $02", getTextRepr(.{ .tag = .sta_zp, .data = .{ .zp = 0x02 } }, &buf));
+        try testing.expectEqualStrings("STA ($20, X)", getTextRepr(.{ .tag = .sta_x_ind_zp, .data = .{ .zp = 0x20 } }, &buf));
+        try testing.expectEqualStrings("ADC ($AD), Y", getTextRepr(.{ .tag = .adc_ind_y_zp, .data = .{ .zp = 0xAD } }, &buf));
+        try testing.expectEqualStrings("STX $0100", getTextRepr(.{ .tag = .stx_abs, .data = .{ .abs = .{ .fixed = 0x0100 } } }, &buf));
+        try testing.expectEqualStrings("STY $ABCD", getTextRepr(.{ .tag = .sty_abs, .data = .{ .abs = .{ .fixed = 0xABCD } } }, &buf));
+        try testing.expectEqualStrings("ADC $FFFF, X", getTextRepr(.{ .tag = .adc_x_abs, .data = .{ .abs = .{ .fixed = 0xFFFF } } }, &buf));
+        try testing.expectEqualStrings("LDA $???? + 65535, X", getTextRepr(.{ .tag = .lda_x_abs, .data = .{ .abs = .{ .unres = .{ .block_index = undefined, .addend = 0xFFFF } } } }, &buf));
     }
 };
 

@@ -1,11 +1,12 @@
 const std = @import("std");
 
-pub const Register = enum(u2) {
+// TODO: move into RegMem.zig?
+pub const Reg = enum(u2) {
     a,
     x,
     y,
 
-    pub fn parse(name: []const u8) ?Register {
-        return std.meta.stringToEnum(Register, name);
+    pub fn parse(name: []const u8) ?Reg {
+        return std.meta.stringToEnum(Reg, name);
     }
 };

@@ -5,6 +5,7 @@
 //       (maybe only in debug mode or make it configurable)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const math = std.math;
 const mem = std.mem;
 const log = std.log.scoped(.emit);
@@ -34,18 +35,18 @@ pub fn emitMir(emit: *Emit) !void {
     for (mir_tags) |tag, inst| {
         try emit.code.append(@enumToInt(tag));
 
-        // emit the operand, if any
+        // Emit the operand, if any.
         const data = emit.mir.instructions.items(.data)[inst];
-        const addr_mode = tag.getAddressingMode();
-        if (mem.eql(u8, addr_mode, "impl")) {
-            // no payload
-        } else if (mem.eql(u8, addr_mode, "imm")) {
-            try emit.emitByte(data.imm);
-        } else if (mem.eql(u8, addr_mode, "zp")) {
-            try emit.emitByte(data.zp);
-        } else if (mem.eql(u8, addr_mode, "abs")) {
-            try emit.emitAddress(data.abs);
-        } else unreachable;
+        const addr_mode = tag.getAddrMode();
+        switch (addr_mode) {
+            .impl => {
+                // No payload.
+            },
+            .imm => try emit.emitByte(data.imm),
+            .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => try emit.emitByte(data.zp),
+            .abs, .x_abs, .y_abs, .ind_abs => try emit.emitAddress(data.abs),
+            .rel => @panic("TODO"),
+        }
     }
 }
 
@@ -57,50 +58,52 @@ fn emitWord(emit: *Emit, word: u16) !void {
     try emit.code.writer().writeIntLittle(u16, word);
 }
 
-fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsoluteAddress) !void {
+fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsAddr) !void {
     switch (abs_addr) {
-        .imm => |imm| try emit.emitWord(imm),
-        .unresolved => |unresolved| {
-            // we are currently emitting a single function's code and we can not
+        .fixed => |fixed_addr| try emit.emitWord(fixed_addr),
+        .unres => |unres| {
+            // We are currently emitting a single function's code and we can not
             // resolve this absolute address in this function before we have the code of all
             // other functions, so we will let the linker fix this up later and emit
-            // a placeholder for now
+            // a placeholder for now.
             const code_offset = emit.codeOffset();
             try emit.emitWord(undefined);
             if (emit.bin_file.cast(link.File.Prg)) |prg| {
                 try prg.unresolved_addresses.append(emit.bin_file.allocator, .{
                     .decl_index = emit.decl_index,
                     .code_offset = code_offset,
-                    .block_index = unresolved.blk_i,
-                    .offset = unresolved.offset,
+                    .block_index = unres.block_index,
+                    .addend = unres.addend,
                 });
             } else unreachable;
         },
-        .current => |current| {
-            const addr = if (emit.bin_file.cast(link.File.Prg)) |prg| addr: {
-                const load_address = prg.getLoadAddress();
-                var program_size = emit.getProgramSize()
-                // note that our program is loaded at the load address so
-                // subtract the size of the address itself
-                - @sizeOf(@TypeOf(load_address));
-                var program_index: u16 = 0;
-                const decl_index_and_blocks = try prg.getAllBlocks(emit.bin_file.allocator);
-                defer emit.bin_file.allocator.free(decl_index_and_blocks);
-                break :addr for (decl_index_and_blocks) |decl_index_and_block| {
-                    if (decl_index_and_block.decl_index == current.decl_index) {
-                        break :addr load_address + program_size + program_index
-                        // - 3 for JMP + absolute address
-                            -
-                            3
-                        // correct off-by-one
-                        + 1;
-                    }
-                    if (decl_index_and_block.block.code) |code|
-                        program_index += @intCast(u16, code.len);
-                } else unreachable;
-            } else unreachable;
-            try emit.emitWord(addr);
-        },
+        //.current => |current| {
+        //    _ = current;
+        //    @panic("TODO");
+        //    //const addr = if (emit.bin_file.cast(link.File.Prg)) |prg| addr: {
+        //    //    const load_address = prg.getLoadAddress();
+        //    //    var program_size = emit.getProgramSize()
+        //    //    // note that our program is loaded at the load address so
+        //    //    // subtract the size of the address itself
+        //    //    - @sizeOf(@TypeOf(load_address));
+        //    //    var program_index: u16 = 0;
+        //    //    const decl_index_and_blocks = try prg.getAllBlocks(emit.bin_file.allocator);
+        //    //    defer emit.bin_file.allocator.free(decl_index_and_blocks);
+        //    //    break :addr for (decl_index_and_blocks) |decl_index_and_block| {
+        //    //        if (decl_index_and_block.decl_index == current.decl_index) {
+        //    //            break :addr load_address + program_size + program_index
+        //    //            // - 3 for JMP + absolute address
+        //    //                -
+        //    //                3
+        //    //            // correct off-by-one
+        //    //            + 1;
+        //    //        }
+        //    //        if (decl_index_and_block.block.code) |code|
+        //    //            program_index += @intCast(u16, code.len);
+        //    //    } else unreachable;
+        //    //} else unreachable;
+        //    //try emit.emitWord(addr);
+        //},
     }
 }
 

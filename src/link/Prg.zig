@@ -48,7 +48,7 @@ blocks: std.AutoArrayHashMapUnmanaged(Module.Decl.Index, Block) = .{},
 /// A pool of free block indices that can be reused for new blocks.
 free_block_indices: std.ArrayListUnmanaged(u16) = .{},
 /// Holds the next block's index.
-/// 0 is reserved for the entry point and must not be freed.
+/// Block index 0 is reserved for the entry point and must not be freed.
 block_index: u16 = 1,
 
 /// One declaration can have multiple unnamed constants associated with it.
@@ -58,10 +58,12 @@ unnamed_consts_blocks: std.AutoHashMapUnmanaged(Module.Decl.Index, std.ArrayList
 /// These will be resolved only after we know the code of the entire program.
 unresolved_addresses: std.ArrayListUnmanaged(UnresolvedAddress) = .{},
 
-// memory state we need to preserve across function codegens (TODO: encapsulate)
+// This is memory state we need to preserve across function codegens. (TODO: encapsulate)
 abs_offset: ?u16 = null,
 zp_free: ?std.BoundedArray(u8, 256) = null,
-zp_res: ?[2]u8 = null,
+// TODO: allocate or reserve stack space
+/// This provides storage for codgen to store state across function codegens.
+//codegen_state: anyopaque, //[512]u8,
 
 pub const base_tag: File.Tag = .prg;
 
@@ -95,8 +97,9 @@ pub const UnresolvedAddress = struct {
     code_offset: u16,
     /// The index of the block whose address should be resolved.
     block_index: u16,
-    /// An addend to be added to the resolved address;
-    offset: u16 = 0,
+    /// This is to be added to the absolute memory address once it is resolved.
+    /// This might represent an index or an offset into the data.
+    addend: u16 = 0,
 };
 
 pub fn createEmpty(allocator: Allocator, options: link.Options) !*Prg {
@@ -205,7 +208,7 @@ fn allocBlockIndex(prg: *Prg) !u16 {
 
 /// Frees a block index and allows it to be reused.
 fn freeBlockIndex(prg: *Prg, index: u16) !void {
-    assert(index != 0); // this block index existed initially and must not be freed
+    assert(index != 0); // This block index existed initially and must not be freed.
     try prg.free_block_indices.append(prg.base.allocator, index);
 }
 
@@ -268,15 +271,15 @@ pub fn getLoadAddress(prg: Prg) u16 {
     return switch (prg.base.options.target.os.tag) {
         .c64 => 0x0801,
         // TODO: actually test the 6502-freestanding target
-        .freestanding => 0x0200, // after the zero page and the stack
+        .freestanding => 0x0200, // The address after the zero page and the stack.
         else => unreachable,
     };
 }
 
 fn writeHeader(prg: Prg) ![]const u8 {
-    // ref: https://github.com/llvm-mos/llvm-mos/blob/ca75934d2b4c29cc9cea38629d50b6c2f42d9016/lld/test/ELF/Inputs/mos-c64.inc
-    // ref: https://github.com/cc65/cc65/blob/60f56c43c769f39089f5005f736a06aacd393224/libsrc/cbm/exehdr.s
-    // ref: https://retrogramming.blogspot.com/2022/02/c64-create-prg-file-with-simple-machine.html
+    // Reference: https://github.com/llvm-mos/llvm-mos/blob/ca75934d2b4c29cc9cea38629d50b6c2f42d9016/lld/test/ELF/Inputs/mos-c64.inc
+    // Reference: https://github.com/cc65/cc65/blob/60f56c43c769f39089f5005f736a06aacd393224/libsrc/cbm/exehdr.s
+    // Reference: https://retrogramming.blogspot.com/2022/02/c64-create-prg-file-with-simple-machine.html
     var bytes = std.ArrayListUnmanaged(u8){};
     const writer = bytes.writer(prg.base.allocator);
     switch (prg.base.options.target.os.tag) {
@@ -288,31 +291,31 @@ fn writeHeader(prg: Prg) ![]const u8 {
             // TODO: allow embedding custom BASIC commands? with `asm`?
             //       shouldn't it be possible if I use `fno-basic-bootstrap` and then
             //       write the bootstrap code in comptime top-level asm at the top of the file?
-            // the following is minimal BASIC bootstrap code that allows us to run our program
-            // using the RUN command, right after loading it, making our program distributable
+            // The following is minimal BASIC bootstrap code that allows us to run our program
+            // using the RUN command, right after loading it, making our program distributable.
 
-            // pointer to the next BASIC line
+            // Pointer to the next BASIC line.
             try writer.writeIntLittle(
                 u16,
                 load_address +
-                    10, // size of what we write after this
+                    10, // Size of what we write after this.
             );
 
-            // the following encodes the BASIC line "0 SYS 2061"
+            // The following encodes the BASIC line "0 SYS 2061".
             {
-                // line marker
+                // Line marker.
                 try writer.writeIntLittle(u16, 0x0000);
 
-                // SYS command token code
+                // SYS command token code.
                 try writer.writeByte(0x9E);
 
-                // no space required
+                // No space required.
 
-                // execution address
+                // Execution address.
                 try writer.writeAll("2061\x00");
             }
 
-            // in our case this marks the end of our linked list
+            // In our case this marks the end of our linked list.
             try writer.writeIntLittle(u16, 0x0000);
         },
         // NOTE: this is like -ofmt=raw...
@@ -339,7 +342,7 @@ pub fn getAllBlocks(prg: *Prg, allocator: Allocator) ![]const DeclIndexAndBlock 
         }
     }
     const slice = try decl_index_and_blocks.toOwnedSlice();
-    // we sort to make sure we output and iterate the blocks in the same order every time
+    // We sort by block index to make sure we output and iterate the blocks in the same order every time.
     std.sort.sort(DeclIndexAndBlock, slice, {}, struct {
         fn comparator(context: void, lhs: DeclIndexAndBlock, rhs: DeclIndexAndBlock) bool {
             _ = context;
@@ -371,16 +374,16 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     try file_flush.ensureUnusedCapacity(prg.base.allocator, 1);
     file_flush.appendBufAssumeCapacity(prg.header);
 
-    // prg.blocks does not have all blocks that need to be written.
+    // prg.blocks does not have all blocks that need to be written so
     // we need to combine prg.blocks and prg.unnamed_consts_blocks into one but also sort them.
     const decl_index_and_blocks = try prg.getAllBlocks(prg.base.allocator);
     defer prg.base.allocator.free(decl_index_and_blocks);
 
-    // resolve all unresolved addresses
+    // Resolve all unresolved absolute memory addresses.
     for (prg.unresolved_addresses.items) |unresolved_address| {
         log.debug("resolving {}...", .{unresolved_address});
 
-        // figure out the address of `unresolved_address.block_index`
+        // Figure out the address of `unresolved_address.block_index`.
         var offset: u16 = 0;
         const blk_addr = (for (decl_index_and_blocks) |decl_index_and_block| {
             const block = decl_index_and_block.block;
@@ -391,7 +394,7 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
                 break load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
             }
             offset += @intCast(u16, code.len);
-        } else unreachable) + unresolved_address.offset;
+        } else unreachable) + unresolved_address.addend;
 
         var owner_block = for (decl_index_and_blocks) |decl_index_and_block| {
             if (decl_index_and_block.decl_index == unresolved_address.decl_index)
@@ -403,8 +406,8 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
         mem.writeIntLittle(u16, @ptrCast(*[2]u8, owner_block.code.?[unresolved_address.code_offset..][0..2]), blk_addr);
     }
 
-    // write all the functions and symbols.
-    // `getAllBlocks` puts the entry point block code first so that we start execution there.
+    // Write all functions and symbols.
+    // The entry point block's code will be first because its block index is 0 so we will start execution there.
     var offset: u16 = 0;
     try file_flush.ensureUnusedCapacity(prg.base.allocator, decl_index_and_blocks.len);
     for (decl_index_and_blocks) |decl_index_and_block| {
@@ -428,6 +431,7 @@ pub fn freeDecl(prg: *Prg, decl_index: Module.Decl.Index) void {
         block.deinit(prg.base.allocator);
         prg.freeBlockIndex(block.index) catch {
             // TODO: propose making freeDecl errorable. Plan9 is facing this exact problem in their freeDecl too
+            @panic("OOM");
         };
     }
 }
@@ -435,8 +439,6 @@ pub fn freeDecl(prg: *Prg, decl_index: Module.Decl.Index) void {
 /// Generates a declaration's code.
 pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !void {
     const decl = module.declPtr(decl_index);
-
-    log.debug("codegen decl {*} ({s}) ({d})", .{ decl, decl.name, decl_index });
 
     var buf = std.ArrayList(u8).init(prg.base.allocator);
     const decl_val = if (decl.val.castTag(.variable)) |payload|
@@ -451,9 +453,6 @@ pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !vo
         .{ .none = {} },
         .{ .parent_atom_index = @enumToInt(decl_index) },
     );
-    // TODO: instead of using `var code` in this and other places,
-    //       use `const code` and then later in `flushModule` where you mutate this,
-    //       use the upcoming `@qualCast`
     var code = switch (res) {
         .ok => buf.items,
         .fail => |error_message| {
@@ -463,7 +462,6 @@ pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !vo
         },
     };
 
-    defer log.debug("generated symbol code: {any} (block index {})", .{ code, prg.blocks.get(decl_index).?.index });
     const gop = try prg.blocks.getOrPut(prg.base.allocator, decl_index);
     if (gop.found_existing) {
         const block = gop.value_ptr;
@@ -488,14 +486,12 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
     const decl_index = func.owner_decl;
     const decl = module.declPtr(decl_index);
 
-    // this function is being updated so we need to redo this as well
+    // This function is being updated so we need to redo this as well.
     if (prg.unnamed_consts_blocks.getPtr(decl_index)) |unnamed_consts| {
         for (unnamed_consts.items) |*unnamed_const|
             unnamed_const.deinit(prg.base.allocator);
         unnamed_consts.clearAndFree(prg.base.allocator);
     }
-
-    log.debug("updateFunc for {} ({s})...", .{ decl_index, decl.name });
 
     var buf = std.ArrayList(u8).init(prg.base.allocator);
     const res = try codegen.generateFunction(
@@ -547,10 +543,8 @@ pub fn updateDeclExports(
     //       (entry, main, start?). we are free to choose any name we like.
     const entry_name = prg.base.options.entry orelse "_start";
 
-    log.debug("updateDeclExports... for {}", .{decl_index});
+    log.debug("updateDeclExports for {}...", .{decl_index});
     for (exports) |@"export"| {
-        log.debug("export: {s}", .{@"export".options.name});
-        //log.debug("export: {}", .{@"export"});
         const options_are_default =
             @"export".options.visibility == .default and
             @"export".options.section == null and
@@ -599,7 +593,7 @@ pub fn updateDeclExports(
 }
 
 pub fn updateDeclLineNumber(prg: *Prg, mod: *Module, decl_index: Module.Decl.Index) !void {
-    // we do not provide debug info
+    // We do not provide debug info.
     _ = prg;
     _ = mod;
     _ = decl_index;
