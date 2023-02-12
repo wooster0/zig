@@ -28,7 +28,7 @@ const Func = @import("Func.zig");
 
 const AddrMem = @This();
 
-/// Memory addresses in the first page of memory available for storage.
+/// Memory addresses in the first page of addressable memory available for storage.
 /// This is expensive, sparsely available memory and very valuable because
 /// writing and reading from it is faster than for absolute memory.
 /// We treat each address separately, rather than using an offset, for ideal zero page
@@ -257,12 +257,12 @@ pub fn free(addr_mem: *AddrMem, addr: Addr, byte_count: u16) void {
 }
 
 test allocZeroPageMemory {
-    var zp_free = std.BoundedArray(u8, 256){};
-    zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 1, 2, 4, 5, 0x80, 0x90 });
     var addr_mem = AddrMem{
-        .zp_free = zp_free,
+        .zp_free = std.BoundedArray(u8, 256){},
         .abs_offset = undefined,
     };
+
+    addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 1, 2, 4, 5, 0x80, 0x90 });
     try testing.expectEqual(@as(u8, 0), addr_mem.allocZeroPageMemory(3).?);
     try testing.expectEqual(@as(u8, 4), addr_mem.allocZeroPageMemory(2).?);
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(2));
@@ -328,9 +328,11 @@ test allocAbsoluteMemory {
     // TODO: more tests
     var addr_mem = AddrMem{
         .zp_free = undefined,
-        .abs_offset = 0xffff,
+        .abs_offset = undefined,
         //.abs_end = 0xfeff,
     };
+
+    addr_mem.abs_offset = 0xffff;
     try testing.expectEqual(@as(u16, 0xffff), addr_mem.allocAbsoluteMemory(1).?);
     try testing.expectEqual(@as(u16, 0xfffe), addr_mem.allocAbsoluteMemory(1).?);
     try testing.expectEqual(@as(u16, 0xfff0), addr_mem.allocAbsoluteMemory(0xe).?);
