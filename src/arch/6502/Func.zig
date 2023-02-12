@@ -579,9 +579,17 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     }
                 },
                 .zp_abs => |dst_addr| {
-                    assert(ty.zigTypeTag() == .Pointer);
-                    _ = dst_addr;
-                    unreachable; // TODO
+                    assert(ty.zigTypeTag() != .Pointer);
+                    // TODO: either X or Y is fine here as both just have to be 0 for this to work.
+                    //       take advantage of that and use the one that's most convenient.
+                    const reg_x_save = try func.saveReg(.x);
+                    defer reg_x_save.restore();
+                    try func.addInst(.ldx_imm, .{ .imm = 0 });
+                    switch (src_reg) {
+                        .a => try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr }),
+                        .x => unreachable, // TODO
+                        .y => unreachable, // TODO
+                    }
                 },
                 .abs_unres => |dst_unres| {
                     switch (src_reg) {
@@ -626,6 +634,8 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 },
                 .zp_abs => |dst_addr| {
                     assert(ty.zigTypeTag() == .Pointer);
+                    const save = try func.saveReg(.a);
+                    defer save.restore();
                     try func.addInst(.lda_imm, .{ .imm = src_addr });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
                     // Zero-extend the zero page address to be pointer-sized.
@@ -1547,7 +1557,281 @@ fn failAddNote(func: *Func, comptime fmt: []const u8, args: anytype) !void {
 }
 
 //
-// MIR generation
+// Binary operations
+//
+
+fn intBinOp(
+    func: *Func,
+    op: Air.Inst.Tag,
+    lhs: MV,
+    rhs: MV,
+    ty: Type,
+    /// The owner of the result.
+    owner: Air.Inst.Index,
+    /// The result destination.
+    maybe_desired_dst: ?MV,
+) !MV {
+    assert(ty.zigTypeTag() == .Int);
+
+    const size = func.getSize(ty).?;
+
+    // Make sure binary-coded decimal mode is off.
+    try func.clearFlag(.decimal);
+    const res = switch (op) {
+        // This assembly shows the addition of two words:
+        // ```
+        // lhs: ; $1150
+        //     .byte $50, $11 ; Little-endian
+        // rhs: ; $2260
+        //     .byte $60, $22 ; Little-endian
+        // res:
+        //     .res 2 ; Reserve bytes for output.
+        //
+        // add:
+        //     cld ; Decimal flag might be set.
+        //     clc ; Carry flag might be set.
+        //     lda lhs + 0
+        //     adc rhs + 0
+        //     ; A = $B0
+        //     sta res + 0
+        //     lda lhs + 1
+        //     adc rhs + 1 ; If we have a carry after this we have an overflow.
+        //     ; A = $33
+        //     sta res + 1
+        //     ; At this point `res` now contains the result $1150 + $2260 = $33B0.
+        //     rts
+        // ```
+        .add, .addwrap, .add_sat => res: {
+            try func.clearFlag(.carry);
+            defer func.resetFlag(.carry);
+
+            var maybe_dst: ?MV = maybe_desired_dst;
+            var maybe_reg_a: ?MV = null;
+
+            // TODO: do this inlined loop at runtime at a certain threshold depending on optimize mode
+            var i: u16 = 0;
+            while (i < size) : (i += 1) {
+                const other = other: {
+                    // We take advantage of the fact that addition is commutative,
+                    // meaning we can add the operands in any order,
+                    // so we will check whether one of them is already in the accumulator.
+                    if (lhs == .reg and lhs.reg == .a) {
+                        maybe_reg_a = func.takeReg(
+                            .a,
+                            null, // We won't take ownership yet in case the size is > 1.
+                        );
+                        break :other rhs;
+                    } else if (rhs == .reg and rhs.reg == .a) {
+                        maybe_reg_a = func.takeReg(
+                            .a,
+                            null, // We won't take ownership yet in case the size is > 1.
+                        );
+                        break :other lhs;
+                    } else {
+                        // Neither LHS nor RHS were already in the accumulator,
+                        // so get either of them in the accumulator.
+                        maybe_reg_a = try func.freeReg(
+                            .a,
+                            null, // We won't take ownership yet in case the size is > 1.
+                        );
+                        // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
+                        //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
+                        switch (lhs) {
+                            .none => unreachable,
+                            .imm => unreachable, // TODO
+                            .reg => unreachable, // TODO
+                            .zp => |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
+                            .abs => |addr| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + i } }),
+                            .zp_abs => unreachable, // TODO: (lda_x_ind_zp) |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
+                            .abs_unres => |abs_unres| try func.addInst(.lda_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                        }
+                        break :other rhs;
+                    }
+                };
+                // Either LHS or RHS is now in the accumulator.
+                // Now add the other operand.
+                switch (other) {
+                    .none => unreachable,
+                    .imm => |imm| {
+                        assert(size == 1);
+                        try func.addInst(.adc_imm, .{ .imm = imm });
+                    },
+                    .reg => unreachable, // TODO
+                    .zp => unreachable, // TODO
+                    .abs => |addr| try func.addInst(.adc_abs, .{ .abs = .{ .fixed = addr + i } }),
+                    .zp_abs => unreachable, // TODO
+                    // TODO: make the convention to use "unres" instead of "abs_unres" as the capture name?
+                    .abs_unres => |abs_unres| try func.addInst(.adc_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                }
+
+                if (size == 1) {
+                    // Now we can safely take ownership.
+                    _ = func.takeReg(.a, owner);
+                    return maybe_reg_a.?;
+                }
+
+                if (maybe_dst == null)
+                    maybe_dst = try func.allocAddrMem(ty);
+                const dst = maybe_dst.?;
+
+                // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
+                //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
+                switch (dst) {
+                    .none => unreachable,
+                    .imm => unreachable,
+                    .reg => unreachable,
+                    .zp => |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+                    .abs => |addr| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + i } }),
+                    .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+                    .abs_unres => |abs_unres| try func.addInst(.sta_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                }
+            }
+            break :res maybe_dst.?;
+        },
+        .sub, .subwrap, .sub_sat => res: {
+            // For subtraction we have to do the opposite of what we do for addition:
+            // we set carry, which for subtraction means we *clear borrow*.
+            try func.setFlag(.carry);
+            defer func.resetFlag(.carry);
+
+            var maybe_dst: ?MV = maybe_desired_dst;
+            var maybe_reg_a: ?MV = null;
+
+            var i: u16 = 0;
+            while (i < size) : (i += 1) {
+                // Get the LHS byte into the accumulator and subtract the RHS byte from it.
+                if (lhs == .reg and lhs.reg == .a) {
+                    // LHS is already in the accumulator so mark it as free.
+                    maybe_reg_a = func.takeReg(
+                        .a,
+                        null, // We won't take ownership yet in case the size is > 1.
+                    );
+                } else {
+                    maybe_reg_a = try func.freeReg(.a, null);
+                    // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
+                    //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
+                    switch (lhs) {
+                        .none => unreachable,
+                        .imm => unreachable, // TODO
+                        .reg => unreachable, // TODO
+                        .zp => |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
+                        .abs => |addr| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + i } }),
+                        .zp_abs => unreachable, // TODO: (lda_x_ind_zp) |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
+                        .abs_unres => |abs_unres| try func.addInst(.lda_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                    }
+                }
+
+                switch (rhs) {
+                    .none => unreachable,
+                    .imm => |imm| {
+                        assert(size == 1);
+                        try func.addInst(.sbc_imm, .{ .imm = imm });
+                    },
+                    .reg => unreachable, // TODO
+                    .zp => unreachable, // TODO
+                    .abs => unreachable, // TODO
+                    .zp_abs => unreachable, // TODO
+                    .abs_unres => |abs_unres| try func.addInst(.sbc_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                }
+
+                if (size == 1) {
+                    _ = func.takeReg(.a, owner);
+                    return maybe_reg_a.?;
+                }
+
+                if (maybe_dst == null)
+                    maybe_dst = try func.allocAddrMem(ty);
+                const dst = maybe_dst.?;
+
+                // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
+                //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
+                switch (dst) {
+                    .none => unreachable,
+                    .imm => unreachable,
+                    .reg => unreachable,
+                    .zp => |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+                    .abs => |addr| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + i } }),
+                    .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+                    .abs_unres => |abs_unres| try func.addInst(.sta_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                }
+            }
+            break :res maybe_dst.?;
+        },
+        else => unreachable,
+    };
+    switch (op) {
+        .add_sat, .sub_sat => return try func.fail("TODO: implement add/sub saturation", .{}),
+        else => {},
+    }
+    return res;
+}
+
+fn ptrBinOp(
+    func: *Func,
+    op: Air.Inst.Tag,
+    ptr: MV,
+    off: MV,
+    ptr_ty: Type,
+    off_ty: Type,
+    /// The owner of the result.
+    owner: Air.Inst.Index,
+) !MV {
+    assert(ptr_ty.zigTypeTag() == .Pointer);
+    assert(off_ty.zigTypeTag() == .Int);
+    assert(off_ty.eql(Type.usize, func.getMod()));
+    const int_op: Air.Inst.Tag = switch (op) {
+        .ptr_add => .add,
+        .ptr_sub => .sub,
+        else => unreachable,
+    };
+    // Create a mutable runtime pointer.
+    const rt_ptr = switch (ptr) {
+        .none => unreachable,
+        .imm => unreachable,
+        .reg => unreachable,
+        .zp => unreachable, // TODO
+        .abs => rt_ptr: {
+            const rt_ptr = try func.allocAddrMem(ptr_ty);
+            assert(rt_ptr == .zp_abs);
+            // DEPRECATED: func.setAddrMem(ptr_ty, rt_ptr, ptr);
+            try func.trans(ptr, rt_ptr, ptr_ty);
+            break :rt_ptr rt_ptr;
+        },
+        .zp_abs => ptr,
+        .abs_unres => unreachable, // TODO
+    };
+    // Reinterpret zp_abs as zp so that it ends up reading the address itself at this
+    // zero page address rather than dereferencing it.
+    const addr = .{ .zp = rt_ptr.zp_abs };
+    const new_ptr = try func.intBinOp(int_op, addr, off, off_ty, owner, addr);
+    assert(new_ptr.eql(addr));
+    // Now make it into a zp_abs again (i.e. a runtime pointer).
+    const res = .{ .zp_abs = new_ptr.zp };
+    return res;
+}
+
+// TODO: maybe this can go into a different section later
+fn elemOffset(func: *Func, index: MV, index_ty: Type, elem_size: u16) !MV {
+    if (elem_size == 1)
+        return index;
+    _ = index_ty;
+
+    switch (index) {
+        .imm => |imm| {
+            if (elem_size < 255)
+                // TODO: shouldn't this work for indexes > 255 too (max u16)?
+                //       introduce MV.index or MV.index_imm just for this and lower it in lowerConstant
+                return MV{ .imm = imm * @intCast(u8, elem_size) };
+            return try func.fail("TODO: implement indexing pointers with elements of sizes > 1 with immediate index > 255", .{});
+        },
+        else => {
+            return try func.fail("TODO: implement indexing pointers with elements of sizes > 1 with runtime-known index", .{}); // TODO: multiply
+        },
+    }
+}
+
+//
+// AIR lowering
 //
 
 fn gen(func: *Func) !void {
@@ -1604,16 +1888,16 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
     log.debug("lowering {} (%{})...", .{ tag, inst });
     return switch (tag) {
         .arg => try func.airArg(inst),
-        .add => try func.fail("TODO: implement add", .{}),
+        .add => try func.airFloatOrIntBinOp(inst, .add),
         .add_optimized => try func.fail("TODO: implement add_optimized", .{}),
-        .addwrap => try func.fail("TODO: implement addwrap", .{}),
+        .addwrap => try func.airIntBinOp(inst, .addwrap),
         .addwrap_optimized => try func.fail("TODO: implement addwrap_optimized", .{}),
-        .add_sat => try func.fail("TODO: implement add_sat", .{}),
-        .sub => try func.fail("TODO: implement sub", .{}),
+        .add_sat => try func.airIntBinOp(inst, .add_sat),
+        .sub => try func.airFloatOrIntBinOp(inst, .sub),
         .sub_optimized => try func.fail("TODO: implement sub_optimized", .{}),
-        .subwrap => try func.fail("TODO: implement subwrap", .{}),
+        .subwrap => try func.airIntBinOp(inst, .subwrap),
         .subwrap_optimized => try func.fail("TODO: implement subwrap_optimized", .{}),
-        .sub_sat => try func.fail("TODO: implement sub_sat", .{}),
+        .sub_sat => try func.airIntBinOp(inst, .sub_sat),
         .mul => try func.fail("TODO: implement mul", .{}),
         .mul_optimized => try func.fail("TODO: implement mul_optimized", .{}),
         .mulwrap => try func.fail("TODO: implement mulwrap", .{}),
@@ -1631,14 +1915,14 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .rem_optimized => try func.fail("TODO: implement rem_optimized", .{}),
         .mod => try func.fail("TODO: implement mod", .{}),
         .mod_optimized => try func.fail("TODO: implement mod_optimized", .{}),
-        .ptr_add => try func.fail("TODO: implement ptr_add", .{}),
-        .ptr_sub => try func.fail("TODO: implement ptr_sub", .{}),
+        .ptr_add => try func.airPtrBinOp(inst, .ptr_add),
+        .ptr_sub => try func.airPtrBinOp(inst, .ptr_sub),
         // TODO: wait for https://github.com/ziglang/zig/issues/14039 to be implemented first
         //       before lowering the following two.
         .max => try func.fail("TODO: implement max", .{}),
         .min => try func.fail("TODO: implement min", .{}),
-        .add_with_overflow => try func.fail("TODO: implement add_with_overflow", .{}),
-        .sub_with_overflow => try func.fail("TODO: implement sub_with_overflow", .{}),
+        .add_with_overflow => try func.airIntBinOpWithOverflow(inst, .add_with_overflow),
+        .sub_with_overflow => try func.airIntBinOpWithOverflow(inst, .sub_with_overflow),
         .mul_with_overflow => try func.fail("TODO: implement mul_with_overflow", .{}),
         .shl_with_overflow => try func.fail("TODO: implement shl_with_overflow", .{}),
         .alloc => try func.airAlloc(inst),
@@ -1768,11 +2052,11 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .slice_ptr => try func.fail("TODO: implement slice_ptr", .{}),
         .ptr_slice_len_ptr => try func.fail("TODO: implement ptr_slice_len_ptr", .{}),
         .ptr_slice_ptr_ptr => try func.fail("TODO: implement ptr_slice_ptr_ptr", .{}),
-        .array_elem_val => try func.fail("TODO: implement array_elem_val", .{}),
+        .array_elem_val => try func.airArrayElemVal(inst),
         .slice_elem_val => try func.fail("TODO: implement slice_elem_val", .{}),
         .slice_elem_ptr => try func.fail("TODO: implement slice_elem_ptr", .{}),
-        .ptr_elem_val => try func.fail("TODO: implement ptr_elem_val", .{}),
-        .ptr_elem_ptr => try func.fail("TODO: implement ptr_elem_ptr", .{}),
+        .ptr_elem_val => try func.airPtrElemVal(inst),
+        .ptr_elem_ptr => try func.airPtrElemPtr(inst),
         .array_to_slice => try func.fail("TODO: implement array_to_slice", .{}),
         .float_to_int => try func.fail("TODO: implement float_to_int", .{}),
         .float_to_int_optimized => try func.fail("TODO: implement float_to_int_optimized", .{}),
@@ -1857,6 +2141,63 @@ fn airArg(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, mv, &.{});
 }
 
+fn airFloatOrIntBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    if (func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    const lhs = try func.resolveInst(bin_op.lhs);
+    const rhs = try func.resolveInst(bin_op.rhs);
+    const lhs_ty = func.air.typeOf(bin_op.lhs);
+    const rhs_ty = func.air.typeOf(bin_op.rhs);
+    assert(lhs_ty.eql(rhs_ty, func.getMod()));
+    const ty = lhs_ty;
+    const res = switch (ty.zigTypeTag()) {
+        .Float => return try func.fail("TODO: implement float binary operations", .{}),
+        .Int => try func.intBinOp(op, lhs, rhs, ty, inst, null),
+        else => unreachable,
+    };
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+fn airIntBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    if (func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    const lhs = try func.resolveInst(bin_op.lhs);
+    const rhs = try func.resolveInst(bin_op.rhs);
+    const lhs_ty = func.air.typeOf(bin_op.lhs);
+    const rhs_ty = func.air.typeOf(bin_op.rhs);
+    assert(lhs_ty.eql(rhs_ty, func.getMod()));
+    const ty = lhs_ty;
+    const res = try func.intBinOp(op, lhs, rhs, ty, inst, null);
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const res_ty = func.air.getRefType(ty_pl.ty);
+    const bin_op = func.air.extraData(Air.Bin, ty_pl.payload).data;
+    if (func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    const ptr = try func.resolveInst(bin_op.lhs);
+    const off = try func.resolveInst(bin_op.rhs);
+    const ptr_ty = func.air.typeOf(bin_op.lhs);
+    assert(res_ty.eql(ptr_ty, func.getMod()));
+    const off_ty = func.air.typeOf(bin_op.rhs);
+    const res = try func.ptrBinOp(op, ptr, off, ptr_ty, off_ty, inst);
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+fn airIntBinOpWithOverflow(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+    _ = op;
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const res_ty = func.air.getRefType(ty_pl.ty);
+    log.debug("res_ty: {}", .{res_ty.fmt(func.getMod())});
+    const extra = func.air.extraData(Air.Bin, ty_pl.payload).data;
+    _ = extra;
+    @panic("TODO");
+}
+
 fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
     // We have two options here:
     //
@@ -1882,8 +2223,8 @@ fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
     // We choose the second option.
     const ptr_ty = func.air.instructions.items(.data)[inst].ty;
     const child_ty = ptr_ty.childType();
-    // Allocate to addressable memory but not registers because they're already sparsely available,
-    // and it would violate the specifications of the AIR instructions because they talk about pointers and not registers.
+    // Allocate to addressable memory but not registers because they're sparsely available
+    // and we will need them for many other different operations.
     const res = try func.allocAddrMem(child_ty);
     func.finishAir(inst, res, &.{});
 }
@@ -2160,4 +2501,69 @@ fn airIntCast(func: *Func, inst: Air.Inst.Index) !void {
     };
 
     func.finishAir(inst, dst, &.{ty_op.operand});
+}
+
+fn airArrayElemVal(func: *Func, inst: Air.Inst.Index) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    const arr = try func.resolveInst(bin_op.lhs);
+    const arr_ty = func.air.typeOf(bin_op.lhs);
+    if (func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    const elem_ty = arr_ty.elemType2();
+    const elem_size = func.getSize(elem_ty).?;
+    const index = try func.resolveInst(bin_op.rhs);
+    const index_ty = func.air.typeOf(bin_op.rhs);
+    const off = try func.elemOffset(index, index_ty, elem_size);
+    const off_ty = index_ty;
+    // TODO(hack): we are interpreting the array as a pointer by passing a different type.
+    //             instead, make a helper addrElemVal or something that can be used for
+    //             airPtrElemVal and this (and maybe factor in airPtrElemPtr too)
+    const ptr_ty = try Type.ptr(func.getAllocator(), func.getMod(), .{
+        .pointee_type = elem_ty,
+        .@"addrspace" = .generic, // TODO: use func.getTarget().defaultAddressSpace()
+        .size = .Many,
+    });
+    defer func.getAllocator().destroy(ptr_ty.ptr_otherwise);
+    const res_ptr = try func.ptrBinOp(.ptr_add, arr, off, ptr_ty, off_ty, inst);
+    const res = try func.allocAddrOrRegMem(elem_ty, inst);
+    try func.trans(res_ptr, res, elem_ty);
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+fn airPtrElemVal(func: *Func, inst: Air.Inst.Index) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    const ptr = try func.resolveInst(bin_op.lhs);
+    const ptr_ty = func.air.typeOf(bin_op.lhs);
+    if (!ptr_ty.isVolatilePtr() and func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    const elem_ty = ptr_ty.elemType2();
+    const elem_size = func.getSize(elem_ty).?;
+    const index = try func.resolveInst(bin_op.rhs);
+    const index_ty = func.air.typeOf(bin_op.rhs);
+    const off = try func.elemOffset(index, index_ty, elem_size);
+    const off_ty = index_ty;
+    const res_ptr = try func.ptrBinOp(.ptr_add, ptr, off, ptr_ty, off_ty, inst);
+    const res = try func.allocAddrOrRegMem(elem_ty, inst);
+    try func.trans(res_ptr, res, elem_ty);
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
+}
+
+fn airPtrElemPtr(func: *Func, inst: Air.Inst.Index) !void {
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const res_ty = func.air.getRefType(ty_pl.ty);
+    const extra = func.air.extraData(Air.Bin, ty_pl.payload).data;
+    if (func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ extra.lhs, extra.rhs });
+    const ptr = try func.resolveInst(extra.lhs);
+    const ptr_ty = func.air.typeOf(extra.lhs);
+    const elem_ty = ptr_ty.elemType2();
+    // TODO: if this childType() fails at some point, use elemType2()
+    assert(elem_ty.eql(res_ty.childType(), func.getMod()));
+    const elem_size = func.getSize(elem_ty).?;
+    const index = try func.resolveInst(extra.rhs);
+    const index_ty = func.air.typeOf(extra.rhs);
+    const off = try func.elemOffset(index, index_ty, elem_size);
+    const off_ty = index_ty;
+    const res = try func.ptrBinOp(.ptr_add, ptr, off, ptr_ty, off_ty, inst);
+    func.finishAir(inst, res, &.{ extra.lhs, extra.rhs });
 }
