@@ -1232,10 +1232,6 @@ const BigTomb = struct {
         big_tomb.func.finishAirBookkeeping();
     }
 };
-fn finishAirBookkeeping(func: *Func) void {
-    if (debug.runtime_safety)
-        func.air_bookkeeping += 1;
-}
 /// Serves for liveness tracking of a runtime-known, possibly larger number of operands than `Liveness.bpi - 1`
 /// (`- 1` to account for the bit that is for the instruction itself).
 fn iterateBigTomb(func: *Func, inst: Air.Inst.Index, operand_count: usize) !BigTomb {
@@ -1246,10 +1242,7 @@ fn iterateBigTomb(func: *Func, inst: Air.Inst.Index, operand_count: usize) !BigT
         .lbt = func.liveness.iterateBigTomb(inst),
     };
 }
-/// Ensures that we are able to process the upcoming deaths of this many additional operands.
-fn ensureProcessDeathCapacity(func: *Func, additional_count: usize) !void {
-    try func.getCurrentBranch().inst_vals.ensureUnusedCapacity(func.getAllocator(), additional_count);
-}
+
 /// Processes the death of a liveness operand of an AIR instruction.
 /// The given result is the result of an AIR instruction.
 /// It is used to prevent the unintentional death of an operand that happens to
@@ -1295,6 +1288,11 @@ fn processDeath(func: *Func, op: Air.Inst.Index, res: MV) void {
         .abs_unres => unreachable,
     }
 }
+/// Ensures that we are able to process the upcoming deaths of this many additional operands.
+fn ensureProcessDeathCapacity(func: *Func, additional_count: usize) !void {
+    try func.getCurrentBranch().inst_vals.ensureUnusedCapacity(func.getAllocator(), additional_count);
+}
+
 /// Concludes liveness analysis for a comptime-known number of operands of an AIR instruction.
 /// `- 1` in `Liveness.bpi - 1` accounts for the fact that one of the bits refers to the instruction itself.
 /// If you have more than `ops.len` operands, use BigTomb.
@@ -1326,6 +1324,44 @@ fn finishAir(func: *Func, inst: Air.Inst.Index, res: MV, ops: []const Air.Inst.R
     }
 
     func.finishAirBookkeeping();
+}
+fn finishAirBookkeeping(func: *Func) void {
+    if (debug.runtime_safety)
+        func.air_bookkeeping += 1;
+}
+
+fn resolveInst(func: *Func, inst: Air.Inst.Ref) !MV {
+    // The first section of indexes correspond to a set number of constant values.
+    const ref_int = @enumToInt(inst);
+    if (ref_int < Air.Inst.Ref.typed_value_map.len) {
+        const tv = Air.Inst.Ref.typed_value_map[ref_int];
+        if (!tv.ty.hasRuntimeBitsIgnoreComptime()) {
+            return MV{ .none = {} };
+        }
+        return func.lowerConstant(tv.val, tv.ty);
+    }
+
+    // If the type has no codegen bits, no need to store it.
+    const inst_ty = func.air.typeOf(inst);
+    if (!inst_ty.hasRuntimeBitsIgnoreComptime())
+        return MV{ .none = {} };
+
+    const inst_index = @intCast(Air.Inst.Index, ref_int - Air.Inst.Ref.typed_value_map.len);
+    switch (func.air.instructions.items(.tag)[inst_index]) {
+        .constant => {
+            // Constants have static lifetimes, so they are always memoized in the outer most table.
+            const branch = &func.branches.items[0];
+            const gop = try branch.inst_vals.getOrPut(func.getAllocator(), inst_index);
+            if (!gop.found_existing) {
+                const ty_pl = func.air.instructions.items(.data)[inst_index].ty_pl;
+                assert(inst_ty.eql(func.air.getRefType(ty_pl.ty), func.getMod()));
+                gop.value_ptr.* = try func.lowerConstant(func.air.values[ty_pl.payload], inst_ty);
+            }
+            return gop.value_ptr.*;
+        },
+        .const_ty => unreachable,
+        else => return func.getResolvedInst(inst_index),
+    }
 }
 fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
     var val = const_val;
@@ -1416,39 +1452,6 @@ fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MV {
         return MV{ .abs_unres = .{ .block_index = block_index } };
     } else unreachable;
 }
-fn resolveInst(func: *Func, inst: Air.Inst.Ref) !MV {
-    // The first section of indexes correspond to a set number of constant values.
-    const ref_int = @enumToInt(inst);
-    if (ref_int < Air.Inst.Ref.typed_value_map.len) {
-        const tv = Air.Inst.Ref.typed_value_map[ref_int];
-        if (!tv.ty.hasRuntimeBitsIgnoreComptime()) {
-            return MV{ .none = {} };
-        }
-        return func.lowerConstant(tv.val, tv.ty);
-    }
-
-    // If the type has no codegen bits, no need to store it.
-    const inst_ty = func.air.typeOf(inst);
-    if (!inst_ty.hasRuntimeBitsIgnoreComptime())
-        return MV{ .none = {} };
-
-    const inst_index = @intCast(Air.Inst.Index, ref_int - Air.Inst.Ref.typed_value_map.len);
-    switch (func.air.instructions.items(.tag)[inst_index]) {
-        .constant => {
-            // Constants have static lifetimes, so they are always memoized in the outer most table.
-            const branch = &func.branches.items[0];
-            const gop = try branch.inst_vals.getOrPut(func.getAllocator(), inst_index);
-            if (!gop.found_existing) {
-                const ty_pl = func.air.instructions.items(.data)[inst_index].ty_pl;
-                assert(inst_ty.eql(func.air.getRefType(ty_pl.ty), func.getMod()));
-                gop.value_ptr.* = try func.lowerConstant(func.air.values[ty_pl.payload], inst_ty);
-            }
-            return gop.value_ptr.*;
-        },
-        .const_ty => unreachable,
-        else => return func.getResolvedInst(inst_index),
-    }
-}
 fn getResolvedInst(func: *Func, inst: Air.Inst.Index) MV {
     // Check whether the instruction refers to a value in one of our local branches.
     // Example for visualization:
@@ -1468,6 +1471,7 @@ fn getResolvedInst(func: *Func, inst: Air.Inst.Index) MV {
         }
     }
 }
+
 /// Attempts to reuse an operand for a different purpose if it would die anyway.
 fn reuseOperand(func: *Func, inst: Air.Inst.Index, operand: Air.Inst.Ref, op_index: Liveness.OperandInt, val: MV) bool {
     if (!func.liveness.operandDies(inst, op_index))
