@@ -1242,21 +1242,24 @@ fn processDeath(func: *Func, op: Air.Inst.Index, res: MV) void {
         .imm => unreachable,
         .reg => |reg| _ = func.takeReg(reg, null),
         .zp, .abs => {
-            // TODO: confirm that this is correct
-            const ty = func.air.typeOfIndex(op);
-            const size = func.getSize(ty).?;
-            log.debug("deallocating {} ({}B of type {})", .{ dead, size, ty.tag() });
-            const addr: AddrMem.Addr = switch (dead) {
-                inline .zp, .zp_abs => |addr| .{ .zp = addr },
-                .abs => |addr| .{ .abs = addr },
-                else => unreachable,
-            };
-            func.addr_mem.free(addr, size);
+            // TODO: reenable once this no longer causes duplicate zp addrs
+            //// TODO: audit this
+            //const ty = func.air.typeOfIndex(op);
+            //const size = func.getSize(ty).?;
+            //log.debug("deallocating {} ({}B of type {})", .{ dead, size, ty.tag() });
+            //const addr: AddrMem.Addr = switch (dead) {
+            //    inline .zp, .zp_abs => |addr| .{ .zp = addr },
+            //    .abs => |addr| .{ .abs = addr },
+            //    else => unreachable,
+            //};
+            //func.addr_mem.free(addr, size);
         },
         .zp_abs => |addr| {
-            // TODO: confirm that this is correct
-            log.debug("deallocating ptr {}", .{dead});
-            func.addr_mem.free(.{ .zp = addr }, 2);
+            _ = addr;
+            // TODO: reenable with the above
+            //// TODO: audit this
+            //log.debug("deallocating ptr {}", .{dead});
+            //func.addr_mem.free(.{ .zp = addr }, 2);
         },
         .abs_unres => unreachable,
     }
