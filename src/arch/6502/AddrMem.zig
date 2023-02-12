@@ -179,6 +179,9 @@ fn allocZeroPageMemory(addr_mem: *AddrMem, byte_count: u16) ?u8 {
         }
     }
 
+    log.debug("allocZeroPageMemory: zp_free BEFORE: {any}", .{addrs});
+    defer log.debug("allocZeroPageMemory: zp_free AFTER: {any}", .{addr_mem.zp_free.constSlice()});
+
     // Find a matching number of free bytes, each with an address only 1 apart from the one before it (contiguous).
     var contig_addrs_i: u8 = 0;
     var contig_addrs_len: u8 = 1;
@@ -232,6 +235,9 @@ fn allocAbsoluteMemory(addr_mem: *AddrMem, byte_count: u16) ?u16 {
 }
 
 pub fn free(addr_mem: *AddrMem, addr: Addr, byte_count: u16) void {
+    log.debug("free: zp_free BEFORE: {any}", .{addr_mem.zp_free.constSlice()});
+    defer log.debug("free: zp_free AFTER: {any}", .{addr_mem.zp_free.constSlice()});
+
     defer addr_mem.preserve(); // TODO
     log.debug("freeing {} bytes from {}", .{ byte_count, addr });
     switch (addr) {
