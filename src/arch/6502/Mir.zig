@@ -292,7 +292,7 @@ pub const Inst = struct {
                 .abs, .x_abs, .y_abs, .ind_abs => {
                     _ = data.abs;
                     if (data.abs == .fixed)
-                        assert(data.abs.fixed > 0xFF); // On failure, use a single byte operand instead.
+                        assert(data.abs.fixed > 0xFF); // Failure: use a single byte operand instead.
                 },
                 .rel => _ = data.rel,
             }
@@ -305,7 +305,7 @@ pub const Inst = struct {
                     assert(@hasField(data_ty, "abs"));
                     if (@hasField(data_ty, "abs")) {
                         if (@hasField(@TypeOf(@field(data, "abs")), "fixed")) {
-                            assert(@field(@field(data, "abs"), "fixed") > 0xFF); // On failure, use a single byte operand instead.
+                            assert(@field(@field(data, "abs"), "fixed") > 0xFF); // Failure: use a single byte operand instead.
                         }
                     }
                 },

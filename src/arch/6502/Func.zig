@@ -1531,6 +1531,10 @@ fn getCurrentInst(func: *Func) struct { tag: *Mir.Inst.Tag, data: *Mir.Inst.Data
     };
 }
 
+//
+// Codegen fail handling
+//
+
 fn fail(func: *Func, comptime fmt: []const u8, args: anytype) !error{CodegenFail} {
     @setCold(true);
     func.err_msg = try Module.ErrorMsg.create(func.getAllocator(), func.src_loc, fmt, args);
@@ -1813,8 +1817,8 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
 
         .field_parent_ptr => try func.fail("TODO: implement field_parent_ptr", .{}),
 
-        .wasm_memory_size => try func.fail("TODO: implement wasm_memory_size", .{}),
-        .wasm_memory_grow => try func.fail("TODO: implement wasm_memory_grow", .{}),
+        .wasm_memory_size => unreachable,
+        .wasm_memory_grow => unreachable,
 
         .cmp_lt_errors_len => try func.fail("TODO: implement cmp_lt_errors_len", .{}),
 
@@ -1886,8 +1890,8 @@ fn airAlloc(func: *Func, inst: Air.Inst.Index) !void {
 
 fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
     const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
-    const ty = func.air.getRefType(ty_pl.ty);
-    assert(ty.tag() == .void);
+    const res_ty = func.air.getRefType(ty_pl.ty);
+    assert(res_ty.tag() == .void);
     const extra = func.air.extraData(Air.Asm, ty_pl.payload);
     var extra_i = extra.end;
     const outputs = @ptrCast([]const Air.Inst.Ref, func.air.extra[extra_i..][0..extra.data.outputs_len]);
@@ -1968,8 +1972,8 @@ fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
 
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {
     // Examples of the behavior of BRK:
-    // * On the C64 it clears the screen and resets.
-    // * On the C128 it prints "BREAK" followed by the values of
+    // * On the Commodore 64 it clears the screen and resets.
+    // * On the Commodore 128 it prints "BREAK" followed by the values of
     //   PC (Program Counter), SR (Status Register),
     //   AC (ACcumulator), XR (X Register), YR (Y Register),
     //   and SP (Stack Pointer)
