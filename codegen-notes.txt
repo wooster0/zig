@@ -1,0 +1,113 @@
+# Pipeline
+
+raw source code ->
+tokenizer ->
+tokens ->
+parser ->
+AST (Abstract Syntax Tree) ->
+AstGen ->
+ZIR (Zig Intermediate Representation) (untyped) ->
+Sema (Semantic Analysis) ->
+AIR (Analyzed Intermediate Representation) (typed) ->
+MIR (Machine Intermediate Representation) ->
+machine code or text assembly code
+
+We, the codegen backend devs, lower AIR to MIR; that's our job, so AIR is the most relevant IR for us.
+
+I think MIR is only used by the in-house backends.
+I believe when compiling with LLVM, AIR is directly lowered to LLVM IR.
+So, MIR is Zig's version of LLVM IR.
+
+## Codegen backend structure
+
+The directory of a codegen backend in src/arch/ contains at least CodeGen.zig, Emit.Zig, and Mir.zig.
+
+CodeGen is what takes in AIR and produces Mir.
+Emit takes in Mir and lowers that to the final representation, be it a textual representation or binary.
+In other words, AIR -> CodeGen -> Mir -> Emit.
+
+## Codegen itself
+
+So far I've observed that the way codegen works is that at codegen time we "simulate" how code is going
+to be executed at runtime and based on that we appropriate code so that we end up doing what we want to do.
+
+To figure out how to lower something, the comments in src/Air.zig for the respective Inst.Tag that you want to lower are crucial.
+
+Instructions always come in the form of a tag (Inst.Tag) and a payload (Inst.Data).
+`Inst`s are in a std.MultiArrayList where the `tag: Tag` and `data: Data` fields are stored in two separate lists (for efficiency).
+
+The meaning of `data: Data` depends on which tag you have. That's why `Data` is a non-tagged union.
+
+Here's an example of obtaining these two crucial values:
+
+```
+const tag = code_gen.air.instructions.items(.tag)[inst];
+
+switch (tag) {
+    .arg => {
+        // The documentation in src/Air.zig says "Uses the `ty` field.", so:
+        const data = code_gen.air.instructions.items(.data)[inst].ty;
+    },
+}
+```
+
+# References
+
+https://mitchellh.com/zig
+and specifically
+https://mitchellh.com/zig/sema
+are very good references.
+
+## Useful excerpts
+
+> AIR is very similar to ZIR. While they are similar and in many cases even share instruction tag names, AIR is a completely separate intermediate representation.
+
+> You can view AIR for any program by running `zig build-obj --verbose-air <file.zig>`. 
+
+> The `%1` is the instruction index of an instruction. When it is followed by `!` it means that this instruction is unused or unreferenced by any other known part of the Zig program.
+
+When an instruction index in AIR is followed by '!', it means the instruction is not referenced by anything after that point.
+
+# Glossary
+
+A lot of these terms are useful to know when you read other codegen backends.
+
+## Stages
+
+* AST: Abstract Syntax Tree
+* ZIR: Zig Intermediate Representation
+* Sema: Semantic Analysis
+* AIR: Analyzed Intermediate Representation
+* MIR: Machine Intermediate Representation
+
+## Liveness
+
+* BPI: Bits Per Instruction
+* Tomb: an operand's place of death
+* BT: Big Tomb
+* LBT: Liveness Big Tomb
+
+## Memory
+
+* MCValue: Machine Code Value
+* WValue: Wasm Value
+* MValue: Memory Value
+* Register spilling: storing data in memory instead of registers because you ran out of registers
+
+## Miscellaneous
+
+* tv: Typed Value
+* ty: Type
+* pl: PayLoad
+* op: OPerand or OPeration
+* Operand: an argument to an instruction
+* un in un_op: unary (operation with one operand)
+* Air.Inst.Ref: a reference to a TypedValue or a ZIR instruction
+* Air.Inst.Index: an index of an AIR instruction
+* Liveness: used to check if an operand is used
+* RegisterManager: used to check if a register would be clobbered etc.
+
+## Linking
+
+* GOT: Global Offset Table
+* DI: Debug Info
