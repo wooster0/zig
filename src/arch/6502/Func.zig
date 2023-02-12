@@ -1673,13 +1673,13 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .try_ptr => try func.fail("TODO: implement try_ptr", .{}),
         .constant => unreachable, // Excluded from function bodies.
         .const_ty => unreachable, // Excluded from function bodies.
-        .dbg_stmt => try func.fail("TODO: implement dbg_stmt", .{}),
-        .dbg_block_begin => try func.fail("TODO: implement dbg_block_begin", .{}),
-        .dbg_block_end => try func.fail("TODO: implement dbg_block_end", .{}),
-        .dbg_inline_begin => try func.fail("TODO: implement dbg_inline_begin", .{}),
-        .dbg_inline_end => try func.fail("TODO: implement dbg_inline_end", .{}),
-        .dbg_var_ptr => try func.fail("TODO: implement dbg_var_ptr", .{}),
-        .dbg_var_val => try func.fail("TODO: implement dbg_var_val", .{}),
+        .dbg_stmt => try func.airDbgStmt(inst),
+        .dbg_block_begin => try func.airDbgBlock(inst),
+        .dbg_block_end => try func.airDbgBlock(inst),
+        .dbg_inline_begin => try func.airDbgInline(inst),
+        .dbg_inline_end => try func.airDbgInline(inst),
+        .dbg_var_ptr => try func.airDbgLocal(inst),
+        .dbg_var_val => try func.airDbgLocal(inst),
         .is_null => try func.fail("TODO: implement is_null", .{}),
         .is_non_null => try func.fail("TODO: implement is_non_null", .{}),
         .is_null_ptr => try func.fail("TODO: implement is_null_ptr", .{}),
@@ -2003,6 +2003,27 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
     big_tomb.feed(pl_op.operand, res);
     for (args) |arg| big_tomb.feed(arg, res);
     return big_tomb.finishAir(res);
+}
+
+fn airDbgStmt(func: *Func, inst: Air.Inst.Index) !void {
+    // TODO: emit debug info
+    func.finishAir(inst, .none, &.{});
+}
+
+fn airDbgBlock(func: *Func, inst: Air.Inst.Index) !void {
+    // TODO: emit debug info
+    func.finishAir(inst, .none, &.{});
+}
+
+fn airDbgInline(func: *Func, inst: Air.Inst.Index) !void {
+    // TODO: emit debug info
+    func.finishAir(inst, .none, &.{});
+}
+
+fn airDbgLocal(func: *Func, inst: Air.Inst.Index) !void {
+    const pl_op = func.air.instructions.items(.data)[inst].pl_op;
+    // TODO: emit debug info
+    func.finishAir(inst, .none, &.{pl_op.operand});
 }
 
 fn airLoad(func: *Func, inst: Air.Inst.Index) !void {
