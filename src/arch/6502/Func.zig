@@ -156,7 +156,7 @@ pub fn generate(
         error.OutOfMemory => |other| return other,
     };
 
-    var mir = Mir{
+    const mir = Mir{
         .instructions = func.mir_instructions.slice(),
     };
 
@@ -1925,7 +1925,7 @@ fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
     const ty_op = func.air.instructions.items(.data)[inst].ty_op;
     _ = ty_op.ty;
     const res = try func.resolveInst(ty_op.operand);
-    return func.finishAir(inst, res, &.{ty_op.operand});
+    func.finishAir(inst, res, &.{ty_op.operand});
 }
 
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {
@@ -2051,7 +2051,7 @@ fn airLoad(func: *Func, inst: Air.Inst.Index) !void {
         try func.trans(ptr, dst, elem_ty);
         break :res dst;
     };
-    return func.finishAir(inst, res, &.{ty_op.operand});
+    func.finishAir(inst, res, &.{ty_op.operand});
 }
 
 fn airRet(func: *Func, inst: Air.Inst.Index) !void {
@@ -2073,7 +2073,7 @@ fn airStore(func: *Func, inst: Air.Inst.Index) !void {
     assert(ptr_ty.childType().eql(val_ty, func.getMod()));
     // DEPRECATED: try func.storeToPtr(ptr, val, ptr_ty, val_ty);
     try func.trans(val, ptr, val_ty);
-    return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
 }
 
 fn airUnreach(func: *Func, inst: Air.Inst.Index) !void {
@@ -2117,5 +2117,5 @@ fn airIntCast(func: *Func, inst: Air.Inst.Index) !void {
         break :dst dst;
     };
 
-    return func.finishAir(inst, dst, &.{ty_op.operand});
+    func.finishAir(inst, dst, &.{ty_op.operand});
 }

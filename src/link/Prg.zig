@@ -529,6 +529,7 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
 }
 
 pub fn getDeclVAddr(prg: *Prg, decl_index: Module.Decl.Index, reloc_info: link.File.RelocInfo) !u64 {
+    // TODO
     _ = prg;
     debug.panic("do we need `getDeclVAddr`? {}, {}", .{ decl_index, reloc_info });
 }
