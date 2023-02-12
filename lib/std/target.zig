@@ -1814,7 +1814,7 @@ pub const Target = struct {
         return switch (target.cpu.arch) {
             .avr => 1,
             .msp430,
-            .@"6502",
+            .@"6502", // TODO: confirm this
             => 2,
             .xcore => 4,
 
