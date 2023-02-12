@@ -40,7 +40,7 @@ pub const Inst = struct {
         add,
         /// Same as `add` with optimized float mode.
         add_optimized,
-        /// Integer addition. Wrapping is defined to be twos complement wrapping.
+        /// Integer addition. Wrapping is defined to be two's complement wrapping.
         /// Both operands are guaranteed to be the same type, and the result type
         /// is the same as both operands.
         /// Uses the `bin_op` field.
@@ -59,7 +59,7 @@ pub const Inst = struct {
         sub,
         /// Same as `sub` with optimized float mode.
         sub_optimized,
-        /// Integer subtraction. Wrapping is defined to be twos complement wrapping.
+        /// Integer subtraction. Wrapping is defined to be two's complement wrapping.
         /// Both operands are guaranteed to be the same type, and the result type
         /// is the same as both operands.
         /// Uses the `bin_op` field.
@@ -78,7 +78,7 @@ pub const Inst = struct {
         mul,
         /// Same as `mul` with optimized float mode.
         mul_optimized,
-        /// Integer multiplication. Wrapping is defined to be twos complement wrapping.
+        /// Integer multiplication. Wrapping is defined to be two's complement wrapping.
         /// Both operands are guaranteed to be the same type, and the result type
         /// is the same as both operands.
         /// Uses the `bin_op` field.
@@ -252,22 +252,22 @@ pub const Inst = struct {
         call_never_tail,
         /// Same as `call` except with the `never_inline` attribute.
         call_never_inline,
-        /// Count leading zeroes of an integer according to its representation in twos complement.
+        /// Count leading zeroes of an integer according to its representation in two's complement.
         /// Result type will always be an unsigned integer big enough to fit the answer.
         /// Uses the `ty_op` field.
         clz,
-        /// Count trailing zeroes of an integer according to its representation in twos complement.
+        /// Count trailing zeroes of an integer according to its representation in two's complement.
         /// Result type will always be an unsigned integer big enough to fit the answer.
         /// Uses the `ty_op` field.
         ctz,
-        /// Count number of 1 bits in an integer according to its representation in twos complement.
+        /// Count number of 1 bits in an integer according to its representation in two's complement.
         /// Result type will always be an unsigned integer big enough to fit the answer.
         /// Uses the `ty_op` field.
         popcount,
-        /// Reverse the bytes in an integer according to its representation in twos complement.
+        /// Reverse the bytes in an integer according to its representation in two's complement.
         /// Uses the `ty_op` field.
         byte_swap,
-        /// Reverse the bits in an integer according to its representation in twos complement.
+        /// Reverse the bits in an integer according to its representation in two's complement.
         /// Uses the `ty_op` field.
         bit_reverse,
 
