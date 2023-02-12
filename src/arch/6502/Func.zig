@@ -1784,13 +1784,12 @@ fn ptrBinOp(
         .ptr_sub => .sub,
         else => unreachable,
     };
-    // Create a mutable runtime pointer.
+    // Create a mutable runtime pointer from the address.
     const rt_ptr = switch (ptr) {
         .none => unreachable,
         .imm => unreachable,
         .reg => unreachable,
-        .zp => unreachable, // TODO
-        .abs => rt_ptr: {
+        .zp, .abs => rt_ptr: {
             const rt_ptr = try func.allocAddrMem(ptr_ty);
             assert(rt_ptr == .zp_abs);
             // DEPRECATED: func.setAddrMem(ptr_ty, rt_ptr, ptr);
