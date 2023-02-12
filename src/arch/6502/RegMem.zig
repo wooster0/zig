@@ -53,21 +53,23 @@ fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comp
 
         const State = enum { set, clear, unknown };
 
-        fn set(flag: *Self) !void {
+        pub fn set(flag: *Self) !void {
             switch (flag.state) {
                 .set => {},
                 .clear, .unknown => {
-                    const func = @fieldParentPtr(Func, field_name, flag);
+                    const reg_mem = @fieldParentPtr(RegMem, field_name, flag);
+                    const func = @fieldParentPtr(Func, "reg_mem", reg_mem);
                     try func.addInst(set_inst, .{ .none = {} });
                     flag.state = .set;
                 },
             }
         }
-        fn clear(flag: *Self) !void {
+        pub fn clear(flag: *Self) !void {
             switch (flag.state) {
                 .clear => {},
                 .set, .unknown => {
-                    const func = @fieldParentPtr(Func, field_name, flag);
+                    const reg_mem = @fieldParentPtr(RegMem, field_name, flag);
+                    const func = @fieldParentPtr(Func, "reg_mem", reg_mem);
                     try func.addInst(clear_inst, .{ .none = {} });
                     flag.state = .clear;
                 },
@@ -77,52 +79,67 @@ fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comp
 }
 
 /// Spills the register if not free and associates it with the new instruction.
-/// If null is given, it means the register is temporarily needed and
-/// will not have an owner thereafter.
-pub fn freeReg(reg_mem: *RegMem, reg: Reg, maybe_inst: ?Air.Inst.Index) !void {
+// TODO: merge with spillReg?
+pub fn freeReg(
+    reg_mem: *RegMem,
+    reg: Reg,
+    /// If null is given, it means the register is temporarily needed and
+    /// will not have an owner thereafter.
+    maybe_owner: ?Air.Inst.Index,
+) !void {
     const func = @fieldParentPtr(Func, "reg_mem", reg_mem);
 
-    log.debug("freeReg: making %{?} the owner of {}", .{ maybe_inst, reg });
+    log.debug("freeReg: making %{?} the owner of {}", .{ maybe_owner, reg });
 
     switch (reg) {
         .a => {
-            if (reg_mem.reg_a_owner) |old_inst| {
-                if (maybe_inst) |inst|
-                    assert(inst != old_inst); // TODO: can it happen that they're the same? in that case don't spill
+            if (reg_mem.reg_a_owner) |old_owner| {
+                if (maybe_owner) |owner| {
+                    if (owner == old_owner)
+                        return;
+                }
                 // TODO: use PHA and PLA to spill using the hardware stack?
                 //       for that we very likely have to introduce a new MemoryValue that says
                 //       the value has to be PLA'd first (MemoryValue.stack).
                 //       also, can we TXA and TYA below and do it there too? measure total cycles of each solution
-                try func.spillReg(reg, old_inst);
+                try func.spillReg(reg, old_owner);
             }
-            reg_mem.reg_a_owner = maybe_inst;
+            reg_mem.reg_a_owner = maybe_owner;
         },
         .x => {
-            if (reg_mem.reg_x_owner) |old_inst| {
-                if (maybe_inst) |inst|
-                    assert(inst != old_inst); // TODO: can it happen that they're the same?
-                try func.spillReg(reg, old_inst);
+            if (reg_mem.reg_x_owner) |old_owner| {
+                if (maybe_owner) |owner| {
+                    if (owner == old_owner)
+                        return;
+                }
+                try func.spillReg(reg, old_owner);
             }
-            reg_mem.reg_x_owner = maybe_inst;
+            reg_mem.reg_x_owner = maybe_owner;
         },
         .y => {
-            if (reg_mem.reg_y_owner) |old_inst| {
-                if (maybe_inst) |inst|
-                    assert(inst != old_inst); // TODO: can it happen that they're the same?
-                try func.spillReg(reg, old_inst);
+            if (reg_mem.reg_y_owner) |old_owner| {
+                if (maybe_owner) |owner| {
+                    if (owner == old_owner)
+                        return;
+                }
+                try func.spillReg(reg, old_owner);
             }
-            reg_mem.reg_y_owner = maybe_inst;
+            reg_mem.reg_y_owner = maybe_owner;
         },
     }
 }
 /// Assumes the given register is now owned by the new instruction and associates it with the new instruction.
-/// If null is given, it means the register is temporarily needed and
-/// will not have an owner thereafter.
-pub fn takeReg(reg_mem: *RegMem, reg: Reg, maybe_inst: ?Air.Inst.Index) void {
+pub fn takeReg(
+    reg_mem: *RegMem,
+    reg: Reg,
+    /// If null is given, it means the register is temporarily needed and
+    /// will not have an owner thereafter.
+    maybe_owner: ?Air.Inst.Index,
+) void {
     switch (reg) {
-        .a => reg_mem.reg_a_owner = maybe_inst,
-        .x => reg_mem.reg_x_owner = maybe_inst,
-        .y => reg_mem.reg_y_owner = maybe_inst,
+        .a => reg_mem.reg_a_owner = maybe_owner,
+        .x => reg_mem.reg_x_owner = maybe_owner,
+        .y => reg_mem.reg_y_owner = maybe_owner,
     }
 }
 
@@ -196,17 +213,17 @@ pub const RegSave = struct {
 
 /// Returns a register free for allocation.
 /// Returns null if all registers are occupied.
-pub fn alloc(reg_mem: *RegMem, inst: Air.Inst.Index) ?Reg {
+pub fn alloc(reg_mem: *RegMem, owner: Air.Inst.Index) ?Reg {
     if (reg_mem.reg_a_owner == null) {
-        reg_mem.reg_a_owner = inst;
+        reg_mem.reg_a_owner = owner;
         return .a;
     }
     if (reg_mem.reg_x_owner == null) {
-        reg_mem.reg_x_owner = inst;
+        reg_mem.reg_x_owner = owner;
         return .x;
     }
     if (reg_mem.reg_y_owner == null) {
-        reg_mem.reg_y_owner = inst;
+        reg_mem.reg_y_owner = owner;
         return .y;
     }
     return null;
@@ -216,9 +233,9 @@ pub fn checkInst(reg_mem: *RegMem, inst: Mir.Inst) void {
     const func = @fieldParentPtr(Func, "reg_mem", reg_mem);
     if (inst.tag.getAffectedReg()) |affected_reg| {
         switch (affected_reg) {
-            .a => if (reg_mem.reg_a_owner) |reg_a_owner| assert(reg_a_owner == func.air_current_inst),
-            .x => if (reg_mem.reg_x_owner) |reg_x_owner| assert(reg_x_owner == func.air_current_inst),
-            .y => if (reg_mem.reg_y_owner) |reg_y_owner| assert(reg_y_owner == func.air_current_inst),
+            .a => if (reg_mem.reg_a_owner) |reg_a_owner| assert(reg_a_owner == func.air_current_inst), // Failure: register clobbered.
+            .x => if (reg_mem.reg_x_owner) |reg_x_owner| assert(reg_x_owner == func.air_current_inst), // Failure: register clobbered.
+            .y => if (reg_mem.reg_y_owner) |reg_y_owner| assert(reg_y_owner == func.air_current_inst), // Failure: register clobbered.
         }
     }
 }
