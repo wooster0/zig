@@ -377,6 +377,7 @@ fn allocAddrMem(func: *Func, ty: Type) !MV {
     };
     return res;
 }
+
 /// Allocates register memory for storing a byte or null if the type is too big.
 fn allocRegMem(
     func: *Func,
@@ -399,17 +400,18 @@ fn allocRegMem(
     const reg = func.reg_mem.alloc(inst) orelse return null;
     return .{ .reg = reg };
 }
+
 /// Allocates addressable or register memory, depending on which is convenient.
 fn allocAddrOrRegMem(
     func: *Func,
     ty: Type,
     /// The newly-allocated memory's owner.
-    inst: Air.Inst.Index,
+    owner: Air.Inst.Index,
 ) !MV {
     // We need to make sure to allocate registers to the zero page as zp_abs
     // but the type will be 2 bytes (usize) so allocRegMem won't work and
     // it will happen in allocAddrMem.
-    if (try func.allocRegMem(ty, inst)) |reg_mem|
+    if (try func.allocRegMem(ty, owner)) |reg_mem|
         return reg_mem;
     return try func.allocAddrMem(ty);
 }
@@ -418,29 +420,58 @@ fn allocAddrOrRegMem(
 // Register management
 //
 
-/// Spills the value in a register to addressable memory to free it for a different purpose.
-pub fn spillReg(func: *Func, reg: Reg, inst: Air.Inst.Index) !void {
-    if (func.liveness.isUnused(inst))
-        return;
-    const reg_val = func.getResolvedInst(inst);
-    assert(reg_val == .reg);
+/// Spills the value of a register to addressable memory to free it for a different purpose.
+// TODO: merge with freeReg?
+pub fn spillReg(
+    func: *Func,
+    reg: Reg,
+    /// The current owner of the register.
+    /// After this spill, it will no longer be the owner.
+    owner: Air.Inst.Index,
+) !void {
+    // TODO: shouldn't it be safe to clobber the register if the owner won't use the register anyway?
+    //if (func.liveness.isUnused(owner))
+    //    return;
+    const reg_val = func.getResolvedInst(owner);
+    assert(reg_val == .reg); // Failure: you gave ownership of the register to the wrong operand.
     const ty = Type.u8;
-    const new_home = try func.allocAddrOrRegMem(ty, inst);
+    const new_home = try func.allocAddrOrRegMem(ty, owner);
     log.debug("spilling register {}'s {} into {}", .{ reg, reg_val, new_home });
     // DEPRECATED: try func.setAddrOrRegMem(ty, new_home, reg_val);
     try func.trans(reg_val, new_home, ty);
-    func.getCurrentBranch().inst_vals.putAssumeCapacity(inst, new_home);
+    func.getCurrentBranch().inst_vals.putAssumeCapacity(owner, new_home);
+    _ = func.takeReg(reg, null);
 }
-fn takeReg(func: *Func, reg: Reg, maybe_inst: ?Air.Inst.Index) MV {
-    func.reg_mem.takeReg(reg, maybe_inst);
+fn takeReg(func: *Func, reg: Reg, maybe_owner: ?Air.Inst.Index) MV {
+    func.reg_mem.takeReg(reg, maybe_owner);
     return .{ .reg = reg };
 }
-fn freeReg(func: *Func, reg: Reg, maybe_inst: ?Air.Inst.Index) !MV {
-    try func.reg_mem.freeReg(reg, maybe_inst);
+fn freeReg(func: *Func, reg: Reg, maybe_owner: ?Air.Inst.Index) !MV {
+    try func.reg_mem.freeReg(reg, maybe_owner);
     return .{ .reg = reg };
 }
 fn saveReg(func: *Func, reg: Reg) !RegMem.RegSave {
-    return func.reg_mem.saveReg(reg);
+    return try func.reg_mem.saveReg(reg);
+}
+
+const Flag = enum { decimal, carry };
+fn setFlag(func: *Func, flag: Flag) !void {
+    try switch (flag) {
+        .decimal => func.reg_mem.decimal.set(),
+        .carry => func.reg_mem.carry.set(),
+    };
+}
+fn clearFlag(func: *Func, flag: Flag) !void {
+    try switch (flag) {
+        .decimal => func.reg_mem.decimal.clear(),
+        .carry => func.reg_mem.carry.clear(),
+    };
+}
+fn resetFlag(func: *Func, flag: Flag) void {
+    switch (flag) {
+        .decimal => func.reg_mem.decimal.state = .unknown,
+        .carry => func.reg_mem.carry.state = .unknown,
+    }
 }
 
 //
