@@ -6,10 +6,10 @@
 //! * http://6502.org
 //! * https://en.wikipedia.org/wiki/MOS_Technology_6502
 //! * https://skilldrick.github.io/easy6502
-//! * https://www.pagetable.com/c64ref/6502/?tab=2
 //! * http://6502.org/tutorials/6502opcodes.html
+//! * https://www.pagetable.com/c64ref/6502/?tab=2
 //! * https://www.masswerk.at/6502/6502_instruction_set.html
-//! * https://www.nesdev.org/wiki/6502_assembly_optimisations
+//! * https://www.nesdev.org/wiki/Programming_guide
 //! * https://llx.com/Neil/a2/opcodes.html
 //! * https://dustlayer.com/news
 //! * https://github.com/KaiSandstrom/C64-Minesweeper
@@ -39,6 +39,9 @@ const Emit = @import("Emit.zig");
 const AddrMem = @import("AddrMem.zig");
 const RegMem = @import("RegMem.zig");
 
+// TODO: review missed optimizations opportunities: https://www.nesdev.org/wiki/6502_assembly_optimisations (always consider optimize mode)
+//       * use synthesized instructions using an identity table: https://www.nesdev.org/wiki/Identity_table
+
 // TODO: open issues for these:
 // * cycle-stepped Emulator.zig
 // * basic pattern-based optimizations:
@@ -48,6 +51,9 @@ const RegMem = @import("RegMem.zig");
 //   e.g. replace JSR + RTS chain with JMP.
 // * 3-byte exe with `pub fn main() void {}` and `-fno-basic-bootstrap`
 
+// TODO: comment on https://github.com/ziglang/zig/issues/5185
+//       and present the use case for iptr/uptr, idata/udata, and maybe ibyte/ubyte
+
 const Func = @This();
 
 //
@@ -55,7 +61,8 @@ const Func = @This();
 //
 
 /// Represents the file for the final output of the whole codegen.
-/// This is the only field that references data preserved across multiple function codegens.
+/// This is the only field that references data preserved across all function codegens.
+// TODO: rename it to just `file`? especially after we support -femit-asm
 bin_file: *link.File,
 /// The location in source of this function.
 src_loc: Module.SrcLoc,
@@ -74,8 +81,12 @@ liveness: Liveness,
 args: []MV = undefined,
 /// The index of the current argument that is being resolved in `airArg`.
 arg_i: u16 = 0,
-/// The result location of the return value of the current function.
+/// The result location of the return value of this function.
 ret_val: MV = undefined,
+
+//
+// Miscellaneous
+//
 
 /// An error message for if codegen fails.
 /// This is set if error.CodegenFail happens.
@@ -279,6 +290,7 @@ const CallMVs = struct {
 ///
 /// So, this is called both when we call a function and once that function is generated.
 /// In both cases for the same function we will receive the same call values.
+// TODO: https://www.nesdev.org/wiki/6502_assembly_optimisations#Use_an_"intelligent"_argument_system (if ReleaseSmall)
 fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
     // Reference: https://llvm-mos.org/wiki/C_calling_convention
     const cc = fn_ty.fnCallingConvention();
@@ -1575,8 +1587,11 @@ fn intBinOp(
 
     const size = func.getSize(ty).?;
 
+    // TODO: use DEC, DEX, DEY, INC, INX, INY. will be useful especially for loops.
     // Make sure binary-coded decimal mode is off.
     try func.clearFlag(.decimal);
+    // TODO: implement https://www.nesdev.org/wiki/6502_assembly_optimisations#Avoiding_the_need_for_CLC/SEC_with_ADC/SBC
+    //       for ADC and SBC
     const res = switch (op) {
         // This assembly shows the addition of two words:
         // ```
@@ -1760,7 +1775,12 @@ fn intBinOp(
         else => unreachable,
     };
     switch (op) {
-        .add_sat, .sub_sat => return try func.fail("TODO: implement add/sub saturation", .{}),
+        .add_sat, .sub_sat => {
+            // NOTE: this is best implemented after implementing some basic branching stuff.
+            //       use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
+            //       to detect overflow to implement this.
+            return try func.fail("TODO: implement add/sub saturation", .{});
+        },
         else => {},
     }
     return res;
@@ -1859,7 +1879,7 @@ fn genBody(func: *Func, body: []const Air.Inst.Index) !void {
         if (debug.runtime_safety)
             func.air_current_inst = inst;
 
-        var i: u16 = @intCast(u16, func.mir_instructions.len);
+        var i = @intCast(u16, func.mir_instructions.len);
         try func.genInst(inst);
         while (i < func.mir_instructions.len) : (i += 1) {
             const mir_inst = Mir.Inst{
@@ -2188,6 +2208,8 @@ fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
 }
 
 fn airIntBinOpWithOverflow(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+    // NOTE: use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
+    //       to detect overflow to implement this.
     _ = op;
     const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
     const res_ty = func.air.getRefType(ty_pl.ty);
@@ -2379,6 +2401,8 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
         assert(callee_ty.zigTypeTag() == .Pointer);
         panic("TODO: handle {}", .{func.air.value(callee).?.tag()});
     }
+
+    // TODO: https://www.nesdev.org/wiki/6502_assembly_optimisations#Avoid_a_jsr_+_rts_chain
 
     const res = call_vals.ret_val;
     var big_tomb = try func.iterateBigTomb(inst, args.len + 1);

@@ -3,7 +3,7 @@
 //! Only supports executable output mode and only the static link mode.
 //! This format is not relocatable.
 //!
-//! File structure:
+//! Binary content:
 //! 1. Little-endian 2-byte load address
 //! 2. BASIC bootstrap code that makes the RUN command work
 //! 3. Entry point function
@@ -540,6 +540,8 @@ pub fn updateDeclExports(
     decl_index: Module.Decl.Index,
     exports: []const *Module.Export,
 ) !void {
+    // TODO: do we use prg.base.options.entry_addr for anything?
+
     // TODO: why "_start"? we could use a prettier name more conventional in the Commodore community
     //       (entry, main, start?). we are free to choose any name we like.
     const entry_name = prg.base.options.entry orelse "_start";
