@@ -1615,6 +1615,36 @@ fn failAddNote(func: *Func, comptime fmt: []const u8, args: anytype) !void {
 // Binary operations
 //
 
+// TODO: move these two into a different section eventually ("Memory interaction"?) if we keep these
+// TODO: instead of these two, make a readable helper for transfering specific bytes designated by an index from src to dst?
+//       maybe an optional `index` param to `trans`? a new transByte? MV.index?
+//       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
+// TODO: loadReg, storeReg?
+/// Loads into the A register a byte of the given value designated by the index.
+fn loadA(func: *Func, val: MV, index: u16) !void {
+    switch (val) {
+        .none => unreachable,
+        .imm => unreachable, // TODO
+        .reg => unreachable, // TODO
+        .zp => |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, index) }),
+        .abs => |addr| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + index } }),
+        .zp_abs => unreachable, // TODO: (lda_x_ind_zp) |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
+        .abs_unres => |abs_unres| try func.addInst(.lda_abs, .{ .abs = .{ .unres = abs_unres.index(index) } }),
+    }
+}
+/// Stores the A register's value to a byte of the given value designated by the index.
+fn storeA(func: *Func, val: MV, index: u16) !void {
+    switch (val) {
+        .none => unreachable,
+        .imm => unreachable,
+        .reg => unreachable,
+        .zp => |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, index) }),
+        .abs => |addr| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + index } }),
+        .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+        .abs_unres => |abs_unres| try func.addInst(.sta_abs, .{ .abs = .{ .unres = abs_unres.index(index) } }),
+    }
+}
+
 fn intBinOp(
     func: *Func,
     op: Air.Inst.Tag,
@@ -1673,36 +1703,19 @@ fn intBinOp(
                     // We take advantage of the fact that addition is commutative,
                     // meaning we can add the operands in any order,
                     // so we will check whether one of them is already in the accumulator.
+                    // In none of the cases do we take ownership of the register yet
+                    // in case the result won't go in the register.
                     if (lhs == .reg and lhs.reg == .a) {
-                        maybe_reg_a = func.takeReg(
-                            .a,
-                            null, // We won't take ownership yet in case the size is > 1.
-                        );
+                        maybe_reg_a = func.takeReg(.a, null);
                         break :other rhs;
                     } else if (rhs == .reg and rhs.reg == .a) {
-                        maybe_reg_a = func.takeReg(
-                            .a,
-                            null, // We won't take ownership yet in case the size is > 1.
-                        );
+                        maybe_reg_a = func.takeReg(.a, null);
                         break :other lhs;
                     } else {
                         // Neither LHS nor RHS were already in the accumulator,
                         // so get either of them in the accumulator.
-                        maybe_reg_a = try func.freeReg(
-                            .a,
-                            null, // We won't take ownership yet in case the size is > 1.
-                        );
-                        // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
-                        //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
-                        switch (lhs) {
-                            .none => unreachable,
-                            .imm => unreachable, // TODO
-                            .reg => unreachable, // TODO
-                            .zp => |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
-                            .abs => |addr| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + i } }),
-                            .zp_abs => unreachable, // TODO: (lda_x_ind_zp) |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
-                            .abs_unres => |abs_unres| try func.addInst(.lda_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
-                        }
+                        maybe_reg_a = try func.freeReg(.a, null);
+                        try func.loadA(lhs, i);
                         break :other rhs;
                     }
                 };
@@ -1731,18 +1744,7 @@ fn intBinOp(
                 if (maybe_dst == null)
                     maybe_dst = try func.allocAddrMem(ty);
                 const dst = maybe_dst.?;
-
-                // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
-                //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
-                switch (dst) {
-                    .none => unreachable,
-                    .imm => unreachable,
-                    .reg => unreachable,
-                    .zp => |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
-                    .abs => |addr| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + i } }),
-                    .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
-                    .abs_unres => |abs_unres| try func.addInst(.sta_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
-                }
+                try func.storeA(dst, i);
             }
             break :res maybe_dst.?;
         },
@@ -1762,21 +1764,14 @@ fn intBinOp(
                     // LHS is already in the accumulator so mark it as free.
                     maybe_reg_a = func.takeReg(
                         .a,
-                        null, // We won't take ownership yet in case the size is > 1.
+                        null, // We won't take ownership of the register yet in case the result won't go in the register.
                     );
                 } else {
-                    maybe_reg_a = try func.freeReg(.a, null);
-                    // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
-                    //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
-                    switch (lhs) {
-                        .none => unreachable,
-                        .imm => unreachable, // TODO
-                        .reg => unreachable, // TODO
-                        .zp => |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
-                        .abs => |addr| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + i } }),
-                        .zp_abs => unreachable, // TODO: (lda_x_ind_zp) |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
-                        .abs_unres => |abs_unres| try func.addInst(.lda_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
-                    }
+                    maybe_reg_a = try func.freeReg(
+                        .a,
+                        null, // We won't take ownership of the register yet in case the result won't go in the register.
+                    );
+                    try func.loadA(lhs, i);
                 }
 
                 switch (rhs) {
