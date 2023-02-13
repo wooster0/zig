@@ -1,6 +1,6 @@
 #!/bin/sh
 
-file_name=fn
+file_name=hello
 
 stage3/bin/zig build-exe $file_name.zig \
     -ofmt=prg \

@@ -148,7 +148,7 @@ pub fn saveReg(reg_mem: *RegMem, reg: Reg) !RegSave {
     const func = @fieldParentPtr(Func, "reg_mem", reg_mem);
     // TODO: simply spilling instead of using the hardware stack
     //       would sometimes save cycles here
-    //       (at the cost of code size; use the optimize mode
+    //       (at the cost of code size; use the optimize mode (getOptimizeMode)
     //       to determine what's better)
     var reg_owner: ?Air.Inst.Index = undefined;
     switch (reg) {

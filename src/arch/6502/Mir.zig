@@ -157,7 +157,7 @@ pub const Inst = struct {
         // TODO: rename to `getAffected` and add `.mem` as another possibility and start tracking
         //       all of addressable memory (all zp and abs addresses) to optimize out ST* instructions etc.?
         //       in that case start tracking the status register through this too: `.stat`.
-        //       this function basically tells us about the semantics of an opcode.
+        //       this function would basically tell us about the semantics of an opcode.
         /// Returns the register that could be affected by the execution of this opcode,
         /// excluding the status register.
         /// "Could" because a register's value might stay the same after execution of this opcode.
@@ -211,6 +211,9 @@ pub const Inst = struct {
             };
         }
 
+        // TODO: getAffectedFlag for safety. this makes it impossible to accidentally clobber a flag.
+        //       this will be even more important later on if/when we use flags for different meanings.
+
         test getOpcodeMnemonic {
             try testing.expectEqualStrings("nop", getOpcodeMnemonic(.nop_impl));
             try testing.expectEqualStrings("lda", getOpcodeMnemonic(.lda_x_abs));
@@ -235,9 +238,9 @@ pub const Inst = struct {
         //       that would make it more distinct from MV, too.
         /// The value is immediately available.
         imm: u8,
-        /// A zero page memory address.
+        /// A zero page address.
         zp: u8,
-        /// An absolute memory address.
+        /// An absolute address.
         abs: AbsAddr,
         /// A relative jump offset.
         rel: i8,
