@@ -225,6 +225,49 @@ fn getSize(func: Func, ty: Type) ?u16 {
     return std.math.cast(u16, ty.abiSize(func.getTarget()));
 }
 
+const OptimizeMode = enum {
+    /// Optimize for performance.
+    fast,
+    /// Optimize for binary size.
+    small,
+};
+/// Our story of handling the optimize mode compile option:
+/// * Ignore the safety optimize modes (i.e. .Debug and .ReleaseSafe);
+///   the AIR as it comes down is already optimized appropriately for safety, if any.
+///   Instead of safety, we will take these as wishes to reduce compile time as much as possible.
+///   For that, we will lump these two in with .ReleaseFast
+///   (TODO: explain why that and why not ReleaseSmall; why is ReleaseFast faster to compile?
+///          also, wouldn't ReleaseSmall be faster to compile because it won't generate huge loops?)
+/// * Always optimize for speed and size as long as both can be optimized for in the same way.
+///   If the solution for either optimization diverges, use this to determine what to codegen.
+/// I.e. we only have to consider .ReleaseFast and .ReleaseSmall.
+fn getOptimizeMode(func: Func) OptimizeMode {
+    return switch (func.bin_file.options.optimize_mode) {
+        .Debug, .ReleaseSafe, .ReleaseFast => .fast,
+        .ReleaseSmall => .small,
+    };
+}
+
+/// Determines at which amount of loop iterations to inline a loop.
+fn getInlineLoop(func: Func, loop_count: u16) bool {
+    // For now, we use no specific inline threshold but it's rather an
+    // always or a never, but we will still base the decision whether to inline
+    // on a threshold in order to be future-proof.
+    // TODO: if you need this inline threshold for other things, add getInlineThreshold()
+    const inline_threshold: u16 = switch (func.getOptimizeMode()) {
+        // Always inline, meaning code size will be bigger.
+        // Though, the 6502 has no CPU cache, so code size doesn't have a direct impact on performance.
+        // NOTE: after https://github.com/ziglang/zig/issues/978 (TODO: change this note after it's implemented)
+        //       the user could still @optimizeFor(.ReleaseSmall)
+        //       in certain cases where this increases code size too
+        //       excessively.
+        .fast => 0,
+        // Never inline, meaning code size will be bigger.
+        .small => std.math.maxInt(u16),
+    };
+    return loop_count > inline_threshold;
+}
+
 //
 // Memory representation
 //
