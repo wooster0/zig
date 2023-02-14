@@ -173,7 +173,7 @@ pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Inde
         .{ .parent_atom_index = @enumToInt(decl_index) },
     );
     var code = switch (res) {
-        .ok => buf.items,
+        .ok => try buf.toOwnedSlice(),
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
             try module.failed_decls.putNoClobber(module.gpa, decl_index, error_message);
@@ -322,7 +322,7 @@ fn writeHeader(prg: Prg) ![]const u8 {
         .freestanding => {},
         else => unreachable,
     }
-    return bytes.toOwnedSlice(prg.base.allocator);
+    return try bytes.toOwnedSlice(prg.base.allocator);
 }
 
 const DeclIndexAndBlock = struct { decl_index: Module.Decl.Index, block: Block };
@@ -454,7 +454,7 @@ pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !vo
         .{ .parent_atom_index = @enumToInt(decl_index) },
     );
     var code = switch (res) {
-        .ok => buf.items,
+        .ok => try buf.toOwnedSlice(),
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
             try module.failed_decls.putNoClobber(module.gpa, decl_index, error_message);
@@ -504,7 +504,7 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
         .{ .none = {} },
     );
     const code = switch (res) {
-        .ok => buf.items,
+        .ok => try buf.toOwnedSlice(),
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
             try module.failed_decls.putNoClobber(prg.base.allocator, decl_index, error_message);
