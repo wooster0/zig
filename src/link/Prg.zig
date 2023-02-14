@@ -228,9 +228,14 @@ fn verifyBuildOptions(prg: Prg) !void {
     }
 }
 
+// TODO: like the ELF linker and others, instead of storing the binary's code in buffers
+//       and then writing them all at the end using writev,
+//       consider always immediately writing the buffer to the binary file at a certain offset using pwrite
+//       and extend the file as we go
 /// Facilitates efficient writing of multiple buffers to a file.
 const FileFlush = struct {
     buffers: std.ArrayListUnmanaged(std.os.iovec_const) = .{},
+    /// The exact amount of bytes that will be written to the file upon flush().
     file_size: u64 = 0,
 
     fn ensureUnusedCapacity(file_flush: *FileFlush, allocator: Allocator, additional_count: usize) !void {
@@ -239,11 +244,20 @@ const FileFlush = struct {
 
     fn appendBufAssumeCapacity(file_flush: *FileFlush, buf: []const u8) void {
         file_flush.buffers.appendAssumeCapacity(.{ .iov_base = buf.ptr, .iov_len = buf.len });
+        file_flush.file_size += buf.len;
     }
 
     fn flush(file_flush: FileFlush, file: std.fs.File) !void {
+        // This sets the file's size to exactly the size that we will write.
+        // This basically serves as a preallocation hint for the file system
+        // for the following write. TODO: confirm this and confirm doing this is actually faster.
+        // This does not alter the file offset.
         try file.setEndPos(file_flush.file_size);
-        try file.pwritevAll(file_flush.buffers.items, 0);
+        // Now write all buffers to the file at the start.
+        // Under normal conditions the file offset should still be 0,
+        // so we can use writev instead of pwritev.
+        assert((file.getPos() catch unreachable) == 0);
+        try file.writevAll(file_flush.buffers.items);
     }
 
     fn deinit(file_flush: *FileFlush, allocator: Allocator) void {
