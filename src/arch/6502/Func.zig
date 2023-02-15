@@ -44,7 +44,7 @@ const RegMem = @import("RegMem.zig");
 
 // TODO: open issues for these:
 // * cycle-stepped Emulator.zig
-// * basic pattern-based optimizations:
+// * basic pattern-based optimizations (based on getOptimizeMode):
 //   e.g. eliminate the second LDA in `sta $9FFF; lda $9FFF`
 //   e.g. eliminate the first LDA in `lda #5; lda #6`
 //   e.g. reduce `sta $02; sta $02; sta $02` to `sta $02`
@@ -85,7 +85,7 @@ arg_i: u16 = 0,
 ret_val: MV = undefined,
 
 //
-// Miscellaneous
+// Miscellaneous state
 //
 
 /// An error message for if codegen fails.
@@ -230,6 +230,7 @@ const OptimizeMode = enum {
     fast,
     /// Optimize for binary size.
     small,
+    // TODO: add `debug` which wouldn't do pattern-based optimizations (see TODO for that)
 };
 /// Our story of handling the optimize mode compile option:
 /// * Ignore the safety optimize modes (i.e. .Debug and .ReleaseSafe);
@@ -261,6 +262,7 @@ fn getInlineLoop(func: Func, loop_count: u16) bool {
         //       the user could still @optimizeFor(.ReleaseSmall)
         //       in certain cases where this increases code size too
         //       excessively.
+        //       then we will probably handle the optimize mode dynamically, anyway.
         .fast => 0,
         // Never inline, meaning code size will be bigger.
         .small => std.math.maxInt(u16),
@@ -488,7 +490,7 @@ pub fn spillReg(
     //if (func.liveness.isUnused(owner))
     //    return;
     const reg_val = func.getResolvedInst(owner);
-    assert(reg_val == .reg); // Failure: you gave ownership of the register to the wrong operand.
+    assert(reg_val == .reg); // If this fails, you gave ownership of the register to the wrong operand.
     const ty = Type.u8;
     const new_home = try func.allocAddrOrRegMem(ty, owner);
     log.debug("spilling register {}'s {} into {}", .{ reg, reg_val, new_home });
@@ -1529,13 +1531,11 @@ fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Decl.Index) !MV {
 }
 fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MV {
     log.debug("lowerUnnamedConst: ty = {}, val = {}", .{ val.fmtValue(ty, func.getMod()), ty.fmt(func.getMod()) });
-    const block_index = @intCast(
-        u16,
-        func.bin_file.lowerUnnamedConst(.{ .ty = ty, .val = val }, func.getDeclIndex()) catch |err| {
-            return try func.fail("lowering unnamed constant failed: {}", .{err});
-        },
-    );
+    const symbol_index = func.bin_file.lowerUnnamedConst(.{ .ty = ty, .val = val }, func.getDeclIndex()) catch |err| {
+        return try func.fail("failed lowering unnamed constant: {}", .{err});
+    };
     if (func.bin_file.cast(link.File.Prg)) |_| {
+        const block_index = @intCast(u16, symbol_index);
         return MV{ .abs_unres = .{ .block_index = block_index } };
     } else unreachable;
 }
@@ -2447,10 +2447,12 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
         if (fn_val.castTag(.function)) |fn_pl| {
             log.debug("Calling {s}...", .{func.getMod().declPtr(fn_pl.data.owner_decl).name});
             if (func.bin_file.cast(link.File.Prg)) |prg| {
-                const blk_i = try prg.recordDecl(fn_pl.data.owner_decl);
-                try func.addInst(.jsr_abs, .{ .abs = .{ .unres = .{ .block_index = blk_i } } });
+                const block_index = try prg.recordDecl(fn_pl.data.owner_decl);
+                try func.addInst(.jsr_abs, .{ .abs = .{ .unres = .{ .block_index = block_index } } });
             } else unreachable;
         } else if (fn_val.castTag(.extern_fn)) |_| {
+            // TODO: move this error into the PRG linker. this is PRG-specific!
+            //       also, start erroring for `extern var` and `extern const`.
             return try func.fail("extern functions not supported", .{});
         } else if (fn_val.castTag(.decl_ref)) |_| {
             return try func.fail("TODO implement calling bitcasted functions", .{});
