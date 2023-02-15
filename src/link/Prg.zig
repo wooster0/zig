@@ -137,6 +137,10 @@ pub fn openPath(allocator: Allocator, sub_path: []const u8, options: link.Option
 
     const file = try options.emit.?.directory.handle.createFile(sub_path, .{
         .read = true,
+        // If this was true, the file would be truncated even if compilation failed,
+        // possibly truncating a previous compilation result,
+        // so we want to truncate only when writing the binary, which happens in FileFlush.flush().
+        .truncate = false,
         .mode = link.determineMode(options),
     });
     errdefer file.close();
@@ -252,7 +256,7 @@ const FileFlush = struct {
     }
 
     fn flush(file_flush: FileFlush, file: std.fs.File) !void {
-        // This sets the file's size to exactly the size that we will write.
+        // This truncates the file's size to exactly the size that we will write.
         // This basically serves as a preallocation hint for the file system
         // for the following write. TODO: confirm this and confirm doing this is actually faster.
         // This does not alter the file offset.
