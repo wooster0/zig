@@ -30,7 +30,14 @@ decl_index: Module.Decl.Index,
 pub fn emitMir(emit: *Emit) !void {
     const mir_tags = emit.mir.instructions.items(.tag);
 
-    try emit.code.ensureTotalCapacity(mir_tags.len);
+    try emit.code.ensureTotalCapacity(
+        // This accounts for the opcode bytes.
+        mir_tags.len
+        // This accounts for that most opcodes take at least one operand byte.
+        * 2,
+    );
+    log.debug("emit.code: len/capacity: {d}/{d}", .{ emit.code.items.len, emit.code.capacity });
+    defer log.debug("emit.code: len/capacity: {d}/{d}", .{ emit.code.items.len, emit.code.capacity });
 
     for (mir_tags) |tag, inst| {
         // Emit the opcode.
