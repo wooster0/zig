@@ -33,7 +33,8 @@ pub fn emitMir(emit: *Emit) !void {
     try emit.code.ensureTotalCapacity(mir_tags.len);
 
     for (mir_tags) |tag, inst| {
-        try emit.code.append(@enumToInt(tag));
+        // Emit the opcode.
+        try emit.emitByte(@enumToInt(tag));
 
         // Emit the operand, if any.
         const data = emit.mir.instructions.items(.data)[inst];
@@ -42,10 +43,10 @@ pub fn emitMir(emit: *Emit) !void {
             .impl => {
                 // No payload.
             },
-            .imm => try emit.emitByte(data.imm),
-            .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => try emit.emitByte(data.zp),
-            .abs, .x_abs, .y_abs, .ind_abs => try emit.emitAddress(data.abs),
-            .rel => @panic("TODO"),
+            .imm => try emit.emitImmediate(data.imm),
+            .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => try emit.emitZeroPageAddress(data.zp),
+            .abs, .x_abs, .y_abs, .ind_abs => try emit.emitAbsoluteAddress(data.abs),
+            .rel => try emit.emitRelativeOffset(data.rel),
         }
     }
 }
@@ -53,12 +54,41 @@ pub fn emitMir(emit: *Emit) !void {
 fn emitByte(emit: *Emit, byte: u8) !void {
     try emit.code.append(byte);
 }
-
 fn emitWord(emit: *Emit, word: u16) !void {
     try emit.code.writer().writeIntLittle(u16, word);
 }
+fn getCodeOffset(emit: Emit) u16 {
+    return @intCast(u16, emit.code.items.len);
+}
 
-fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsAddr) !void {
+fn emitImmediate(emit: *Emit, imm: Mir.Inst.Imm) !void {
+    switch (imm) {
+        .val => |val| try emit.emitByte(val),
+        .unres_addr_half => |unres_addr_half| {
+            // We are currently emitting a single function's code and we can not
+            // resolve this absolute address half in this function before we have the code of all
+            // other functions, so we will let the linker fix this up later and emit
+            // a placeholder for now.
+            const code_offset = emit.getCodeOffset();
+            try emit.emitByte(undefined);
+            if (emit.bin_file.cast(link.File.Prg)) |prg| {
+                try prg.unres_addrs.append(emit.bin_file.allocator, .{
+                    .decl_index = emit.decl_index,
+                    .code_offset = code_offset,
+                    .block_index = unres_addr_half.block_index,
+                    .addend = 0,
+                    .half = unres_addr_half.half,
+                });
+            } else unreachable;
+        },
+    }
+}
+
+fn emitZeroPageAddress(emit: *Emit, zp_addr: u8) !void {
+    try emit.emitByte(zp_addr);
+}
+
+fn emitAbsoluteAddress(emit: *Emit, abs_addr: Mir.Inst.Abs) !void {
     switch (abs_addr) {
         .fixed => |fixed_addr| try emit.emitWord(fixed_addr),
         .unres => |unres| {
@@ -66,14 +96,18 @@ fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsAddr) !void {
             // resolve this absolute address in this function before we have the code of all
             // other functions, so we will let the linker fix this up later and emit
             // a placeholder for now.
-            const code_offset = emit.codeOffset();
-            try emit.emitWord(undefined);
+            const code_offset = emit.getCodeOffset();
+            switch (abs_addr) {
+                .fixed => unreachable,
+                .unres => try emit.emitWord(undefined),
+            }
             if (emit.bin_file.cast(link.File.Prg)) |prg| {
-                try prg.unresolved_addresses.append(emit.bin_file.allocator, .{
+                try prg.unres_addrs.append(emit.bin_file.allocator, .{
                     .decl_index = emit.decl_index,
                     .code_offset = code_offset,
                     .block_index = unres.block_index,
-                    .addend = unres.addend,
+                    .addend = abs_addr.unres.addend,
+                    .half = null,
                 });
             } else unreachable;
         },
@@ -107,23 +141,23 @@ fn emitAddress(emit: *Emit, abs_addr: Mir.Inst.AbsAddr) !void {
     }
 }
 
-fn codeOffset(emit: Emit) u16 {
-    return @intCast(u16, emit.code.items.len);
+fn emitRelativeOffset(emit: *Emit, rel: i8) !void {
+    try emit.emitByte(@bitCast(u8, rel));
 }
 
-/// Returns the size of the program up to this function including any headers sans any symbols.
-fn getProgramSize(emit: Emit) u16 {
-    const header_size = if (emit.bin_file.cast(link.File.Prg)) |prg| header_size: {
-        break :header_size @intCast(u16, prg.header.len);
-    } else unreachable;
-    var byte_size: u16 = header_size;
-    var i: u16 = 0;
-    while (i < emit.mir.instructions.len) : (i += 1) {
-        const inst = Mir.Inst{
-            .tag = emit.mir.instructions.items(.tag)[i],
-            .data = emit.mir.instructions.items(.data)[i],
-        };
-        byte_size += inst.getByteSize();
-    }
-    return byte_size;
-}
+///// Returns the size of the program up to this function including any headers sans any symbols.
+//fn getProgramSize(emit: Emit) u16 {
+//    const header_size = if (emit.bin_file.cast(link.File.Prg)) |prg| header_size: {
+//        break :header_size @intCast(u16, prg.header.len);
+//    } else unreachable;
+//    var byte_size: u16 = header_size;
+//    var i: u16 = 0;
+//    while (i < emit.mir.instructions.len) : (i += 1) {
+//        const inst = Mir.Inst{
+//            .tag = emit.mir.instructions.items(.tag)[i],
+//            .data = emit.mir.instructions.items(.data)[i],
+//        };
+//        byte_size += inst.getByteSize();
+//    }
+//    return byte_size;
+//}

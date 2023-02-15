@@ -56,7 +56,7 @@ unnamed_consts_blocks: std.AutoHashMapUnmanaged(Module.Decl.Index, std.ArrayList
 
 /// This holds a list of absolute addresses that we are yet to resolve.
 /// These will be resolved only after we know the code of the entire program.
-unresolved_addresses: std.ArrayListUnmanaged(UnresolvedAddress) = .{},
+unres_addrs: std.ArrayListUnmanaged(UnresAddr) = .{},
 
 // This is memory state we need to preserve across function codegens. (TODO: encapsulate)
 abs_offset: ?u16 = null,
@@ -90,7 +90,8 @@ const Block = struct {
 };
 
 /// An unresolved absolute memory address.
-pub const UnresolvedAddress = struct {
+// Design decision note: not called UnresAbsAddr because we don't have any other kind of address.
+pub const UnresAddr = struct {
     /// The declaration this unresolved address is within.
     decl_index: Module.Decl.Index,
     /// Where in this block's code the resolved address is to be written.
@@ -99,7 +100,9 @@ pub const UnresolvedAddress = struct {
     block_index: u16,
     /// This is to be added to the absolute memory address once it is resolved.
     /// This might represent an index or an offset into the data.
-    addend: u16 = 0,
+    addend: u16,
+    /// This determines whether to resolve this address to its low or high byte half, if either.
+    half: ?u1,
 };
 
 pub fn createEmpty(allocator: Allocator, options: link.Options) !*Prg {
@@ -162,14 +165,18 @@ pub fn deinit(prg: *Prg) void {
     }
     prg.unnamed_consts_blocks.deinit(prg.base.allocator);
     prg.free_block_indices.deinit(prg.base.allocator);
-    prg.unresolved_addresses.deinit(prg.base.allocator);
+    prg.unres_addrs.deinit(prg.base.allocator);
 }
 
-/// Returns the block index of the lowered unnamed constant, as a `u32` but should be casted to `u16`.
-/// `decl_index` is the function that this unnamed constant belongs to.
-pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Index) !u32 {
+/// Lowers an unnamed constanst and returns its block index as a `u32` which is to be casted to `u16`.
+pub fn lowerUnnamedConst(
+    prg: *Prg,
+    tv: TypedValue,
+    /// The parent this unnamed constant belongs to.
+    parent_decl_index: Module.Decl.Index,
+) !u32 {
     const module = prg.base.options.module.?;
-    const decl = module.declPtr(decl_index);
+    const decl = module.declPtr(parent_decl_index);
 
     var buf = std.ArrayList(u8).init(prg.base.allocator);
     const res = try codegen.generateSymbol(
@@ -178,13 +185,13 @@ pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Inde
         tv,
         &buf,
         .{ .none = {} },
-        .{ .parent_atom_index = @enumToInt(decl_index) },
+        .{ .parent_atom_index = @enumToInt(parent_decl_index) },
     );
     var code = switch (res) {
         .ok => try buf.toOwnedSlice(),
         .fail => |error_message| {
             decl.analysis = .codegen_failure;
-            try module.failed_decls.putNoClobber(module.gpa, decl_index, error_message);
+            try module.failed_decls.putNoClobber(module.gpa, parent_decl_index, error_message);
             return error.AnalysisFail;
         },
     };
@@ -195,7 +202,7 @@ pub fn lowerUnnamedConst(prg: *Prg, tv: TypedValue, decl_index: Module.Decl.Inde
         .index = blk_i,
     };
 
-    const gop = try prg.unnamed_consts_blocks.getOrPut(prg.base.allocator, decl_index);
+    const gop = try prg.unnamed_consts_blocks.getOrPut(prg.base.allocator, parent_decl_index);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -402,30 +409,35 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     defer prg.base.allocator.free(decl_index_and_blocks);
 
     // Resolve all unresolved absolute memory addresses.
-    for (prg.unresolved_addresses.items) |unresolved_address| {
-        log.debug("resolving {}...", .{unresolved_address});
+    for (prg.unres_addrs.items) |unres_addr| {
+        log.debug("resolving {}...", .{unres_addr});
 
-        // Figure out the address of `unresolved_address.block_index`.
+        // Figure out the address of `unres_addr.block_index`.
         var offset: u16 = 0;
         const blk_addr = (for (decl_index_and_blocks) |decl_index_and_block| {
             const block = decl_index_and_block.block;
             const code = block.code.?;
             assert(code.len != 0);
-            if (unresolved_address.block_index == block.index) {
+            if (unres_addr.block_index == block.index) {
                 const load_address = prg.getLoadAddress();
                 break load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
             }
             offset += @intCast(u16, code.len);
-        } else unreachable) + unresolved_address.addend;
+        } else unreachable) + unres_addr.addend;
 
         var owner_block = for (decl_index_and_blocks) |decl_index_and_block| {
-            if (decl_index_and_block.decl_index == unresolved_address.decl_index)
+            if (decl_index_and_block.decl_index == unres_addr.decl_index)
                 break decl_index_and_block.block;
         } else unreachable;
 
-        log.debug("resolved address {} as 0x{X:0>4}", .{ unresolved_address, blk_addr });
+        log.debug("resolved address {} as 0x{X:0>4}", .{ unres_addr, blk_addr });
 
-        mem.writeIntLittle(u16, @ptrCast(*[2]u8, owner_block.code.?[unresolved_address.code_offset..][0..2]), blk_addr);
+        if (unres_addr.half) |half| {
+            const addr_halves = @bitCast([2]u8, blk_addr);
+            owner_block.code.?[unres_addr.code_offset..][0] = addr_halves[half];
+        } else {
+            mem.writeIntLittle(u16, @ptrCast(*[2]u8, owner_block.code.?[unres_addr.code_offset..][0..2]), blk_addr);
+        }
     }
 
     // Write all functions and symbols.
