@@ -234,41 +234,58 @@ pub const Inst = struct {
     pub const Data = union {
         /// The operand, if any, is implied.
         none: void,
-        // TODO: simplify to `byte: u8` and `word: u16`.
-        //       that would make it more distinct from MV, too.
-        /// The value is immediately available.
-        imm: u8,
+        /// An immediately available value.
+        imm: Imm,
         /// A zero page address.
         zp: u8,
         /// An absolute address.
-        abs: AbsAddr,
-        /// A relative jump offset.
+        abs: Abs,
+        /// A relative offset.
         rel: i8,
     };
 
-    /// An unknown absolute memory address that is yet to be resolved by the linker.
-    pub const UnresAbsAddr = struct {
-        /// The index of the block that we want to know the absolute memory address of.
+    pub const Imm = union(enum) {
+        val: u8,
+        /// The half of an unresolved address.
+        unres_addr_half: UnresAddrHalf,
+    };
+
+    /// An unknown memory address that is yet to be resolved by the linker.
+    pub const UnresAddr = struct {
+        /// The index of the block that we want to know the memory address of.
+        // TODO: rename to `index` to be more compatible with the terminology of other linkers/output formats?
         block_index: u16,
-        /// This is to be added to the absolute memory address once it is resolved.
+        /// This is to be added to the memory address once it is resolved.
         /// This might represent an index or an offset into the data.
         addend: u16 = 0,
 
-        pub fn index(unres_abs_addr: UnresAbsAddr, offset: u16) UnresAbsAddr {
-            assert(unres_abs_addr.addend == 0); // Unresolved absolute addresses should be indexed only once.
-            return .{ .block_index = unres_abs_addr.block_index, .addend = offset };
+        pub fn index(unres_addr: UnresAddr, offset: u16) UnresAddr {
+            assert(unres_addr.addend == 0); // Unresolved addresses should be indexed only once.
+            return .{ .block_index = unres_addr.block_index, .addend = offset };
+        }
+
+        pub fn takeHalf(unres_addr: UnresAddr, half: enum { low, high }) UnresAddrHalf {
+            assert(unres_addr.addend == 0); // We won't need the addend.
+            return .{ .block_index = unres_addr.block_index, .half = @enumToInt(half) };
         }
     };
-
-    // TODO: use `extra` for this?
-    pub const AbsAddr = union(enum) {
+    /// An unknown low or high byte half of an memory address that is yet to be resolved by the linker.
+    pub const UnresAddrHalf = struct {
+        /// The index of the block that we want to know the memory address of.
+        // TODO: rename to `index` to be more compatible with the terminology of other linkers/output formats?
+        block_index: u16,
+        /// The half this resolves to: either the low byte or the high byte half of a word.
+        half: u1,
+    };
+    /// An absolute memory address.
+    pub const Abs = union(enum) {
         /// The address is known and fixed and does not change.
         // Design decision note: "const" is a keyword and "static" is one letter longer.
         //                       "resolved" is a bad because it was never unresolved to begin with.
         fixed: u16,
-        /// The absolute memory address is unknown and yet to be resolved by the linker.
+        /// The memory address is unknown and yet to be resolved by the linker.
         // Design decision note: "block" is too specific of a name.
-        unres: UnresAbsAddr,
+        unres: UnresAddr,
         ///// The current address of this word subtracted by the given offset.
         //current: struct {
         //    // TODO: decl_i
@@ -333,8 +350,7 @@ pub const Inst = struct {
     }
 
     /// Returns an all-uppercase assembly text code representation of this instruction.
-    /// Uses decimal for immediate values < 10; hexadecimal otherwise. (TODO: or probably just always use hex)
-    // TODO: use this for -femit-asm once we can
+    // TODO: use this for -femit-asm once we can. also support '%' binary.
     pub fn getTextRepr(inst: Inst, buf: *[20]u8) []const u8 {
         checkCombo(inst.tag, inst.data);
         const addr_mode = inst.tag.getAddrMode();
@@ -358,16 +374,20 @@ pub const Inst = struct {
         };
         const slice = switch (addr_mode) {
             .impl => std.fmt.bufPrint(buf, "{s}", .{opcode_mnemonic}),
-            .imm => imm: {
-                const imm = inst.data.imm;
-                break :imm if (imm < 0xA)
-                    std.fmt.bufPrint(buf, "{s} #{d}", .{ opcode_mnemonic, imm })
-                else
-                    std.fmt.bufPrint(buf, "{s} #${X:0>2}", .{ opcode_mnemonic, imm });
+            .imm => switch (inst.data.imm) {
+                .val => |val| std.fmt.bufPrint(buf, "{s} #${X:0>2}", .{ opcode_mnemonic, val }),
+                // TODO: this shouldn't be emitted on -femit-asm; resolve this beforehand to `imm`
+                .unres_addr_half => |unres_addr_half| std.fmt.bufPrint(buf, "{s} #${s}", .{
+                    opcode_mnemonic, switch (unres_addr_half.half) {
+                        0 => "LO",
+                        1 => "HI",
+                    },
+                }),
             },
             .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => std.fmt.bufPrint(buf, "{s} {s}${X:0>2}{s}", .{ opcode_mnemonic, prefix, inst.data.zp, suffix }),
             .abs, .x_abs, .y_abs, .ind_abs => switch (inst.data.abs) {
                 .fixed => |addr| std.fmt.bufPrint(buf, "{s} {s}${X:0>4}{s}", .{ opcode_mnemonic, prefix, addr, suffix }),
+                // TODO: this shouldn't be emitted on -femit-asm; resolve this beforehand to `fixed`
                 .unres => |unres| std.fmt.bufPrint(buf, "{s} {s}$???? + {d}{s}", .{ opcode_mnemonic, prefix, unres.addend, suffix }),
                 //.current => @panic("TODO"),
             },

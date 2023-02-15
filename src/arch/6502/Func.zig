@@ -287,7 +287,7 @@ const MV = union(enum) {
     /// The value is pointed to by an absolute memory address at this zero page address in memory.
     zp_abs: u8,
     /// The value is at an absolute memory address in memory that is yet to be resolved by the linker.
-    abs_unres: Mir.Inst.UnresAbsAddr,
+    abs_unres: Mir.Inst.UnresAddr,
 
     fn eql(lhs: MV, rhs: MV) bool {
         return switch (lhs) {
@@ -552,21 +552,21 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 .imm => unreachable,
                 .reg => |dst_reg| {
                     switch (dst_reg) {
-                        .a => try func.addInst(.lda_imm, .{ .imm = src_imm }),
-                        .x => try func.addInst(.ldx_imm, .{ .imm = src_imm }),
-                        .y => try func.addInst(.ldy_imm, .{ .imm = src_imm }),
+                        .a => try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } }),
+                        .x => try func.addInst(.ldx_imm, .{ .imm = .{ .val = src_imm } }),
+                        .y => try func.addInst(.ldy_imm, .{ .imm = .{ .val = src_imm } }),
                     }
                 },
                 .zp => |dst_addr| {
                     const reg_a = try func.saveReg(.a);
                     defer reg_a.restore();
-                    try func.addInst(.lda_imm, .{ .imm = src_imm });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr });
                 },
                 .abs => |dst_addr| {
                     const reg_a = try func.saveReg(.a);
                     defer reg_a.restore();
-                    try func.addInst(.lda_imm, .{ .imm = src_imm });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } });
                     try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr } });
                 },
                 .zp_abs => |dst_addr| {
@@ -577,14 +577,14 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     //       take advantage of that and use the one that's most convenient.
                     const reg_x_save = try func.saveReg(.x);
                     defer reg_x_save.restore();
-                    try func.addInst(.ldx_imm, .{ .imm = 0 });
-                    try func.addInst(.lda_imm, .{ .imm = src_imm });
+                    try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } });
                     try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr });
                 },
                 .abs_unres => |dst_abs_unres| {
                     const reg_a_save = try func.saveReg(.a);
                     defer reg_a_save.restore();
-                    try func.addInst(.lda_imm, .{ .imm = src_imm });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } });
                     try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_abs_unres } });
                 },
             }
@@ -639,7 +639,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     //       take advantage of that and use the one that's most convenient.
                     const reg_x_save = try func.saveReg(.x);
                     defer reg_x_save.restore();
-                    try func.addInst(.ldx_imm, .{ .imm = 0 });
+                    try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } });
                     switch (src_reg) {
                         .a => try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr }),
                         .x => unreachable, // TODO
@@ -691,10 +691,10 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     assert(ty.zigTypeTag() == .Pointer);
                     const save = try func.saveReg(.a);
                     defer save.restore();
-                    try func.addInst(.lda_imm, .{ .imm = src_addr });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = src_addr } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
                     // Zero-extend the zero page address to be pointer-sized.
-                    try func.addInst(.lda_imm, .{ .imm = 0 });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = 0 } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
                 },
                 .abs_unres => |dst_unres| {
@@ -745,12 +745,12 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     assert(ty.zigTypeTag() == .Pointer);
                     const save = try func.saveReg(.a);
                     defer save.restore();
-                    const addr_bytes = @bitCast([2]u8, src_addr);
+                    const addr_halves = @bitCast([2]u8, src_addr);
                     // Low byte first.
-                    try func.addInst(.lda_imm, .{ .imm = addr_bytes[0] });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[0] } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
                     // High byte second.
-                    try func.addInst(.lda_imm, .{ .imm = addr_bytes[1] });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[1] } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
                 },
                 .abs_unres => |dst_unres| {
@@ -775,7 +775,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     //       take advantage of that and use the one that's most convenient.
                     const reg_y_save = try func.saveReg(.y);
                     defer reg_y_save.restore();
-                    try func.addInst(.ldy_imm, .{ .imm = 0 });
+                    try func.addInst(.ldy_imm, .{ .imm = .{ .val = 0 } });
                     switch (dst_reg) {
                         .a => try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr }),
                         .x => unreachable, // TODO: try func.addInst(.ldx_ind_y_zp, .{ .zp = src_addr }),
@@ -790,7 +790,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                     var i: u8 = 0;
                     while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = i });
+                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                         try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
                         try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
                     }
@@ -803,7 +803,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                     var i: u8 = 0;
                     while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = i });
+                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                         try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
                         try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
                     }
@@ -825,7 +825,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                     var i: u8 = 0;
                     while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = i });
+                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                         try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
                         try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
                     }
@@ -865,17 +865,28 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     }
                 },
                 .zp_abs => |dst_addr| {
-                    assert(ty.zigTypeTag() != .Pointer);
-                    const reg_a_save = try func.saveReg(.a);
-                    defer reg_a_save.restore();
-                    const reg_y_save = try func.saveReg(.y);
-                    defer reg_y_save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = i });
-                        try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
-                        try func.addInst(.sta_ind_y_zp, .{ .zp = dst_addr });
+                    switch (ty.zigTypeTag()) {
+                        .Pointer => {
+                            const save = try func.saveReg(.a);
+                            defer save.restore();
+                            try func.addInst(.lda_imm, .{ .imm = .{ .unres_addr_half = src_unres.takeHalf(.low) } });
+                            try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
+                            try func.addInst(.lda_imm, .{ .imm = .{ .unres_addr_half = src_unres.takeHalf(.high) } });
+                            try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
+                        },
+                        else => {
+                            const reg_a_save = try func.saveReg(.a);
+                            defer reg_a_save.restore();
+                            const reg_y_save = try func.saveReg(.y);
+                            defer reg_y_save.restore();
+                            // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                            var i: u8 = 0;
+                            while (i < @intCast(u8, size)) : (i += 1) {
+                                try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
+                                try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
+                                try func.addInst(.sta_ind_y_zp, .{ .zp = dst_addr });
+                            }
+                        },
                     }
                 },
                 .abs_unres => |dst_unres| {
@@ -1435,16 +1446,12 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
     }
 
     if (val.castTag(.decl_ref)) |decl_ref| {
-        //const decl_index = decl_ref.data;
-        //return func.lowerDeclRef(val, ty, decl_index);
-        _ = decl_ref;
-        unreachable; // TODO
+        const decl_index = decl_ref.data;
+        return func.lowerDeclRef(val, ty, decl_index);
     }
     if (val.castTag(.decl_ref_mut)) |decl_ref_mut| {
-        //const decl_index = decl_ref_mut.data.decl_index;
-        //return func.lowerDeclRef(val, ty, decl_index);
-        _ = decl_ref_mut;
-        unreachable; // TODO
+        const decl_index = decl_ref_mut.data.decl_index;
+        return func.lowerDeclRef(val, ty, decl_index);
     }
 
     // Try lowering the constant directly to an MV or else if it doesn't fit,
@@ -1504,6 +1511,21 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
 
     // The value is not immediately representable as an MV so emit it to the binary.
     return try func.lowerUnnamedConst(val, ty);
+}
+/// Lowers declaration references, such as normal `"strings"` which reference the actual characters.
+fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Decl.Index) !MV {
+    _ = val;
+
+    log.debug("lowerDeclRef: {}", .{ty.tag()});
+
+    const mod = func.getMod();
+    const decl = mod.declPtr(decl_index);
+    mod.markDeclAlive(decl);
+
+    if (func.bin_file.cast(link.File.Prg)) |prg| {
+        const block_index = try prg.recordDecl(decl_index);
+        return MV{ .abs_unres = .{ .block_index = block_index } };
+    } else unreachable;
 }
 fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MV {
     log.debug("lowerUnnamedConst: ty = {}, val = {}", .{ val.fmtValue(ty, func.getMod()), ty.fmt(func.getMod()) });
@@ -1725,7 +1747,7 @@ fn intBinOp(
                     .none => unreachable,
                     .imm => |imm| {
                         assert(size == 1);
-                        try func.addInst(.adc_imm, .{ .imm = imm });
+                        try func.addInst(.adc_imm, .{ .imm = .{ .val = imm } });
                     },
                     .reg => unreachable, // TODO
                     .zp => unreachable, // TODO
@@ -1778,7 +1800,7 @@ fn intBinOp(
                     .none => unreachable,
                     .imm => |imm| {
                         assert(size == 1);
-                        try func.addInst(.sbc_imm, .{ .imm = imm });
+                        try func.addInst(.sbc_imm, .{ .imm = .{ .val = imm } });
                     },
                     .reg => unreachable, // TODO
                     .zp => unreachable, // TODO
