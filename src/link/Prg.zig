@@ -109,6 +109,10 @@ pub fn createEmpty(allocator: Allocator, options: link.Options) !*Prg {
 
     if (options.use_llvm) return error.LLVMHasNoPrgBackend;
     if (options.use_lld) return error.LLDHasNoPrgBackend;
+    switch (options.target.cpu.arch) {
+        .@"6502" => {},
+        else => return error.UnsupportedCpuArchitecture,
+    }
 
     const prg = try allocator.create(Prg);
     errdefer allocator.destroy(prg);
