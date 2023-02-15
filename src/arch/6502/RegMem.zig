@@ -233,9 +233,9 @@ pub fn checkInst(reg_mem: *RegMem, inst: Mir.Inst) void {
     const func = @fieldParentPtr(Func, "reg_mem", reg_mem);
     if (inst.tag.getAffectedReg()) |affected_reg| {
         switch (affected_reg) {
-            .a => if (reg_mem.reg_a_owner) |reg_a_owner| assert(reg_a_owner == func.air_current_inst), // Failure: register clobbered.
-            .x => if (reg_mem.reg_x_owner) |reg_x_owner| assert(reg_x_owner == func.air_current_inst), // Failure: register clobbered.
-            .y => if (reg_mem.reg_y_owner) |reg_y_owner| assert(reg_y_owner == func.air_current_inst), // Failure: register clobbered.
+            .a => if (reg_mem.reg_a_owner) |reg_a_owner| assert(reg_a_owner == func.air_current_inst), // If this fails, the register was clobbered.
+            .x => if (reg_mem.reg_x_owner) |reg_x_owner| assert(reg_x_owner == func.air_current_inst), // If this fails, the register was clobbered.
+            .y => if (reg_mem.reg_y_owner) |reg_y_owner| assert(reg_y_owner == func.air_current_inst), // If this fails, the register was clobbered.
         }
     }
 }

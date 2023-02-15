@@ -46,7 +46,7 @@ pub const Inst = struct {
 
     /// The 6502 has 151 unique instructions. Organized into addressing modes, it has 56 instructions.
     ///
-    /// We recognize the following addressing modes:
+    /// The 6502 has these addressing modes:
     /// * Implied (impl) (e.g. `BRK`):
     ///   The operand, if any, is implicitly stated in the operation code of the instruction itself.
     /// * Immediate (imm) (e.g. `LDA #4`):
@@ -77,7 +77,6 @@ pub const Inst = struct {
     ///   The zero page boundary is never crossed.
     /// * Relative (rel) (e.g. `BEQ $40`):
     ///   The operand is a signed byte that is added to the program counter, which allows jumping relatively +-128 bytes from the instruction following this one.
-    ///
     // Design decision note:
     // Because the layout of an instruction byte is supposedly in the form of
     // AAABBBCC, where AA and CC define the operation and BBB the addressing mode,
@@ -229,7 +228,7 @@ pub const Inst = struct {
         }
     };
 
-    /// The payload. This is the operand of the instruction.
+    /// The payload. This is the operand of the opcode.
     /// The meaning of this data is determined by `tag`.
     pub const Data = union {
         /// The operand, if any, is implied.
@@ -312,7 +311,7 @@ pub const Inst = struct {
                 .abs, .x_abs, .y_abs, .ind_abs => {
                     _ = data.abs;
                     if (data.abs == .fixed)
-                        assert(data.abs.fixed > 0xFF); // Failure: use a single byte operand instead.
+                        assert(data.abs.fixed > 0xFF); // If this fails, use a single byte operand instead.
                 },
                 .rel => _ = data.rel,
             }
@@ -325,7 +324,7 @@ pub const Inst = struct {
                     assert(@hasField(data_ty, "abs"));
                     if (@hasField(data_ty, "abs")) {
                         if (@hasField(@TypeOf(@field(data, "abs")), "fixed")) {
-                            assert(@field(@field(data, "abs"), "fixed") > 0xFF); // Failure: use a single byte operand instead.
+                            assert(@field(@field(data, "abs"), "fixed") > 0xFF); // If this fails, use a single byte operand instead.
                         }
                     }
                 },

@@ -474,11 +474,11 @@ pub fn freeDecl(prg: *Prg, decl_index: Module.Decl.Index) void {
 pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !void {
     const decl = module.declPtr(decl_index);
 
+    // TODO: properly handle `extern fn`, `extern const`, `extern var`, and anything else that's
+    //       extern and emit an error.
+
     var buf = std.ArrayList(u8).init(prg.base.allocator);
-    const decl_val = if (decl.val.castTag(.variable)) |payload|
-        payload.data.init
-    else
-        decl.val;
+    const decl_val = if (decl.val.castTag(.variable)) |payload| payload.data.init else decl.val;
     const res = try codegen.generateSymbol(
         &prg.base,
         decl.srcLoc(),
