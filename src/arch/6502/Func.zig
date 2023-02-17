@@ -1601,17 +1601,11 @@ fn reuseOperand(func: *Func, inst: Air.Inst.Index, operand: Air.Inst.Ref, op_ind
 //
 
 /// Adds an MIR instruction to the output.
-/// See `Mir.Inst.checkCombo` for an explanation on why `data` is `anytype`.
-/// It has safety that ensures the following:
-/// * It is impossible to generate invalid instructions.
-/// * It is impossible to clobber registers unintentionally.
-pub fn addInst(func: *Func, tag: Mir.Inst.Tag, data: anytype) !void {
-    // TODO: try doing the checkCombo at comptime by making `tag` and `data` comptime
-    //       (as of writing, making `tag` and `data` comptime crashes the compiler)
-    const inst = Mir.Inst{ .tag = tag, .data = @as(Mir.Inst.Data, data) };
+/// It has safety that ensures:
+/// * Registers are not clobbered unintentionally.
+pub fn addInst(func: *Func, tag: Mir.Inst.Tag, data: Mir.Inst.Data) !void {
+    const inst = Mir.Inst{ .tag = tag, .data = data };
     if (debug.runtime_safety) {
-        // Prevent generating invalid instructions.
-        Mir.Inst.checkCombo(tag, data);
         // Prevent clobbering registers unintentionally.
         func.reg_mem.checkInst(inst);
     }

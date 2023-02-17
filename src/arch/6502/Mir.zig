@@ -83,11 +83,6 @@ pub const Inst = struct {
     // we could assemble the byte according to that format but the problem with that is that
     // we would deal with possible ambiguities and exceptions to that rule.
     // It seems simpler to define only the opcodes we actually need. This way it is trivial to extend, too.
-    //
-    // Design decision note:
-    // What if we had separated mnemonic and addressing mode into two enums?
-    // In that case `checkCombo` would need a gigantic `switch` checking each combo manually,
-    // or we would simply not have that kind of safety.
     pub const Tag = enum(u8) {
         // The tag name must be the opcode's mnemonic followed by the addressing mode as a suffix.
         // Instructions are sorted by opcode.
@@ -294,48 +289,8 @@ pub const Inst = struct {
         //},
     };
 
-    /// Checks this combination of tag (opcode) and data (addressing mode) and makes sure it evaluates to a valid instruction.
-    /// The reason it is `data: anytype` instead of `data: Data` is that while the argument is comptime-known,
-    /// (TODO: try making it comptime along with `data: anytype` in `Func.addInst`)
-    /// `Data` is a union and the language does not allow us to check which field is active even if
-    /// the union value is comptime-known, so instead we use anonymous structs and check
-    /// that the field name matches the addressing mode suffix of the opcode tag.
-    pub fn checkCombo(tag: Tag, data: anytype) void {
-        const addr_mode = tag.getAddrMode();
-        const data_ty = @TypeOf(data);
-        if (data_ty == Data) {
-            switch (addr_mode) {
-                .impl => _ = data.none,
-                .imm => _ = data.imm,
-                .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => _ = data.zp,
-                .abs, .x_abs, .y_abs, .ind_abs => {
-                    _ = data.abs;
-                    if (data.abs == .fixed)
-                        assert(data.abs.fixed > 0xFF); // If this fails, use a single byte operand instead.
-                },
-                .rel => _ = data.rel,
-            }
-        } else {
-            switch (addr_mode) {
-                .impl => assert(@hasField(data_ty, "none")),
-                .imm => assert(@hasField(data_ty, "imm")),
-                .zp, .x_zp, .y_zp, .x_ind_zp, .ind_y_zp => assert(@hasField(data_ty, "zp")),
-                .abs, .x_abs, .y_abs, .ind_abs => {
-                    assert(@hasField(data_ty, "abs"));
-                    if (@hasField(data_ty, "abs")) {
-                        if (@hasField(@TypeOf(@field(data, "abs")), "fixed")) {
-                            assert(@field(@field(data, "abs"), "fixed") > 0xFF); // If this fails, use a single byte operand instead.
-                        }
-                    }
-                },
-                .rel => assert(@hasField(data_ty, "rel")),
-            }
-        }
-    }
-
     /// Returns the size of this instruction, including opcode and operand.
     pub fn getByteSize(inst: Inst) u2 {
-        checkCombo(inst.tag, inst.data);
         const addr_mode = inst.tag.getAddrMode();
         const operand_size: u2 = switch (addr_mode) {
             .impl => 0,
@@ -351,7 +306,6 @@ pub const Inst = struct {
     /// Returns an all-uppercase assembly text code representation of this instruction.
     // TODO: use this for -femit-asm once we can. also support '%' binary.
     pub fn getTextRepr(inst: Inst, buf: *[20]u8) []const u8 {
-        checkCombo(inst.tag, inst.data);
         const addr_mode = inst.tag.getAddrMode();
         var opcode_mnemonic_buf: [3]u8 = undefined;
         const opcode_mnemonic = std.ascii.upperString(&opcode_mnemonic_buf, inst.tag.getOpcodeMnemonic());
@@ -396,13 +350,6 @@ pub const Inst = struct {
     }
 
     // TODO: function for calculating a program's total exact cycles? and execution time using hertz
-
-    test checkCombo {
-        Inst.checkCombo(.rts_impl, .{ .none = {} });
-        Inst.checkCombo(.lda_imm, .{ .imm = .{ .imm = 0x10 } });
-        Inst.checkCombo(.lda_zp, .{ .zp = .{ .zp = 0x00 } });
-        Inst.checkCombo(.jsr_abs, .{ .abs = .{ .fixed = 0xFFD2 } });
-    }
 
     test getByteSize {
         try testing.expectEqual(@as(u2, 1), getByteSize(.{ .tag = .nop_impl, .data = .{ .none = {} } }));
