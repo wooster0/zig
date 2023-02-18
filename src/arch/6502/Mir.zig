@@ -248,6 +248,7 @@ pub const Inst = struct {
     pub const UnresAddr = struct {
         /// The index of the block that we want to know the memory address of.
         // TODO: rename to `index` to be more compatible with the terminology of other linkers/output formats?
+        //       and then "index of the block" -> "index of the symbol"? maybe rename `unres` to `sym`
         block_index: u16,
         /// This is to be added to the memory address once it is resolved.
         /// This might represent an index or an offset into the data.

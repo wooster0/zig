@@ -7,8 +7,8 @@
 //! * https://en.wikipedia.org/wiki/MOS_Technology_6502
 //! * https://skilldrick.github.io/easy6502
 //! * http://6502.org/tutorials/6502opcodes.html
-//! * https://www.pagetable.com/c64ref/6502/?tab=2
 //! * https://www.masswerk.at/6502/6502_instruction_set.html
+//! * https://www.pagetable.com/c64ref/6502/?tab=2
 //! * https://www.nesdev.org/wiki/Programming_guide
 //! * https://llx.com/Neil/a2/opcodes.html
 //! * https://dustlayer.com/news
@@ -21,14 +21,12 @@ const panic = debug.panic;
 const assert = debug.assert;
 const log = std.log.scoped(.codegen);
 const Module = @import("../../Module.zig");
-const Decl = Module.Decl;
 const link = @import("../../link.zig");
 const Type = @import("../../type.zig").Type;
 const Value = @import("../../value.zig").Value;
 const Air = @import("../../Air.zig");
 const Liveness = @import("../../Liveness.zig");
 const codegen = @import("../../codegen.zig");
-const GenerateSymbolError = codegen.GenerateSymbolError;
 const Result = codegen.Result;
 const DebugInfoOutput = codegen.DebugInfoOutput;
 const bits = @import("bits.zig");
@@ -148,7 +146,7 @@ pub fn generate(
     liveness: Liveness,
     code: *std.ArrayList(u8),
     debug_output: DebugInfoOutput,
-) GenerateSymbolError!Result {
+) codegen.GenerateSymbolError!Result {
     _ = debug_output;
 
     const addr_mem = AddrMem.init(bin_file.options.target, bin_file);
@@ -191,7 +189,7 @@ fn deinit(func: *Func) void {
 }
 
 //
-// Getters
+// Miscellaneous getters
 //
 
 /// Returns the allocator we will be using throughout.
@@ -210,7 +208,7 @@ fn getMod(func: Func) *Module {
 }
 
 /// Returns the index of this function's declaration.
-fn getDeclIndex(func: Func) Decl.Index {
+fn getDeclIndex(func: Func) Module.Decl.Index {
     return func.props.owner_decl;
 }
 
@@ -275,6 +273,7 @@ fn getInlineLoop(func: Func, loop_count: u16) bool {
 //
 
 /// Memory Value. This represents the location of a value in memory.
+/// Types determine how the data is to be interpreted.
 const MV = union(enum) {
     /// The value has no bits that we could represent at runtime.
     none: void,
@@ -313,7 +312,7 @@ const Branch = struct {
         branch.inst_vals.deinit(allocator);
     }
 };
-/// Returns the runtime branch we're in.
+/// Returns the runtime branch we're in currently.
 fn getCurrentBranch(func: *Func) *Branch {
     return &func.branches.items[func.branches.items.len - 1];
 }
@@ -1522,7 +1521,7 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
     return try func.lowerUnnamedConst(val, ty);
 }
 /// Lowers declaration references, such as `"strings"` which reference the actual characters.
-fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Decl.Index) !MV {
+fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Module.Decl.Index) !MV {
     _ = val;
 
     log.debug("lowerDeclRef: {}", .{ty.tag()});
@@ -1603,6 +1602,7 @@ fn reuseOperand(func: *Func, inst: Air.Inst.Index, operand: Air.Inst.Ref, op_ind
 /// Adds an MIR instruction to the output.
 /// It has safety that ensures:
 /// * Registers are not clobbered unintentionally.
+// TODO: make the signature `inst: Mir.Inst`
 pub fn addInst(func: *Func, tag: Mir.Inst.Tag, data: Mir.Inst.Data) !void {
     const inst = Mir.Inst{ .tag = tag, .data = data };
     if (debug.runtime_safety) {
@@ -1773,7 +1773,7 @@ fn intBinOp(
         },
         .sub, .subwrap, .sub_sat => res: {
             // For subtraction we have to do the opposite of what we do for addition:
-            // we set carry, which for subtraction means we *clear borrow*.
+            // we *set carry*, which for subtraction means we *clear borrow*.
             try func.setFlag(.carry);
             defer func.resetFlag(.carry);
 
@@ -2376,6 +2376,7 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
 
     var big_tomb = try func.iterateBigTomb(inst, outputs.len + inputs.len);
     for (outputs) |output| {
+        // TODO: do we need this check?
         if (output == .none) continue;
         big_tomb.feed(output, res);
     }
@@ -2402,7 +2403,7 @@ fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {
     //   and SP (Stack Pointer)
     try func.addInst(.brk_impl, .{ .none = {} });
     // TODO: some OSs (like the SOS written for the Apple III) apparently use BRK for system calls and the byte following BRK is the syscall number.
-    //       investigate that, interrupts, and the necessity of this NOP more. for now we include it just to be sure because BRK advances the PC by 2.
+    //       investigate that, interrupts, and the necessity of this NOP more. for now we include it just to be sure because BRK advances the program counter by 2.
     //       https://retrocomputing.stackexchange.com/questions/12291/what-are-uses-of-the-byte-after-brk-instruction-on-6502
     try func.addInst(.nop_impl, .{ .none = {} });
     func.finishAir(inst, .none, &.{});

@@ -97,17 +97,20 @@ fn emitZeroPageAddress(emit: *Emit, zp_addr: u8) !void {
 
 fn emitAbsoluteAddress(emit: *Emit, abs_addr: Mir.Inst.Abs) !void {
     switch (abs_addr) {
-        .fixed => |fixed_addr| try emit.emitWord(fixed_addr),
+        .fixed => |fixed| {
+            // Although it is perfectly fine to use operands <= $FF for absolute addressing modes,
+            // if the address is <= $FF it means that we could have used a zero page addressing mode
+            // which we would want to use instead because it saves one byte, so this assertion ensures we do that optimization.
+            assert(fixed > 0xFF);
+            try emit.emitWord(fixed);
+        },
         .unres => |unres| {
             // We are currently emitting a single function's code and we can not
             // resolve this absolute address in this function before we have the code of all
             // other functions, so we will let the linker fix this up later and emit
             // a placeholder for now.
             const code_offset = emit.getCodeOffset();
-            switch (abs_addr) {
-                .fixed => unreachable,
-                .unres => try emit.emitWord(undefined),
-            }
+            try emit.emitWord(undefined);
             if (emit.bin_file.cast(link.File.Prg)) |prg| {
                 try prg.unres_addrs.append(emit.bin_file.allocator, .{
                     .decl_index = emit.decl_index,
@@ -151,20 +154,3 @@ fn emitAbsoluteAddress(emit: *Emit, abs_addr: Mir.Inst.Abs) !void {
 fn emitRelativeOffset(emit: *Emit, rel: i8) !void {
     try emit.emitByte(@bitCast(u8, rel));
 }
-
-///// Returns the size of the program up to this function including any headers sans any symbols.
-//fn getProgramSize(emit: Emit) u16 {
-//    const header_size = if (emit.bin_file.cast(link.File.Prg)) |prg| header_size: {
-//        break :header_size @intCast(u16, prg.header.len);
-//    } else unreachable;
-//    var byte_size: u16 = header_size;
-//    var i: u16 = 0;
-//    while (i < emit.mir.instructions.len) : (i += 1) {
-//        const inst = Mir.Inst{
-//            .tag = emit.mir.instructions.items(.tag)[i],
-//            .data = emit.mir.instructions.items(.data)[i],
-//        };
-//        byte_size += inst.getByteSize();
-//    }
-//    return byte_size;
-//}

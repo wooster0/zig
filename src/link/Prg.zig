@@ -51,7 +51,7 @@ free_block_indices: std.ArrayListUnmanaged(u16) = .{},
 /// Block index 0 is reserved for the entry point and must not be freed.
 block_index: u16 = 1,
 
-/// One declaration can have multiple unnamed constants associated with it.
+/// One declaration can have multiple unnamed constants (blocks) associated with it.
 unnamed_consts_blocks: std.AutoHashMapUnmanaged(Module.Decl.Index, std.ArrayListUnmanaged(Block)) = .{},
 
 /// This holds a list of absolute addresses that we are yet to resolve.
@@ -263,9 +263,9 @@ const FileFlush = struct {
     }
 
     fn flush(file_flush: FileFlush, file: std.fs.File) !void {
-        // This truncates the file's size to exactly the size that we will write.
-        // This basically serves as a preallocation hint for the file system
-        // for the following write. TODO: confirm this and confirm doing this is actually faster.
+        // This truncates the file's size to exactly the size that we will write and
+        // is necessary for if the output file is bigger than the data we'll write.
+        // It can also serve as a preallocation hint for the file system for the following write.
         // This does not alter the file offset.
         try file.setEndPos(file_flush.file_size);
         // Now write all buffers to the file at the start.
@@ -403,8 +403,7 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     try file_flush.ensureUnusedCapacity(prg.base.allocator, 1);
     file_flush.appendBufAssumeCapacity(prg.header);
 
-    // prg.blocks does not have all blocks that need to be written so
-    // we need to combine prg.blocks and prg.unnamed_consts_blocks into one but also sort them.
+    // For a complete list of all blocks we need to combine prg.blocks and prg.unnamed_consts_blocks into one but also sort them.
     const decl_index_and_blocks = try prg.getAllBlocks(prg.base.allocator);
     defer prg.base.allocator.free(decl_index_and_blocks);
 
