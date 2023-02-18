@@ -106,6 +106,7 @@ A lot of these terms are useful to know when you read other codegen backends.
 * Air.Inst.Index: an index of an AIR instruction
 * Liveness: used to check if an operand is used
 * RegisterManager: used to check if a register would be clobbered etc.
+* br: break
 
 ## Linking
 

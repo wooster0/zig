@@ -9,6 +9,7 @@ const debug = std.debug;
 const assert = debug.assert;
 const testing = std.testing;
 const bits = @import("bits.zig");
+const Module = @import("../../Module.zig");
 const Reg = bits.Reg;
 
 const Mir = @This();
@@ -272,6 +273,13 @@ pub const Inst = struct {
         /// The half this resolves to: either the low byte or the high byte half of a word.
         half: u1,
     };
+    const DeclAddr = struct {
+        /// The index of the declaration to resolve the address of.
+        index: Module.Decl.Index,
+        /// This is to be added to the address once it is resolved.
+        /// This might represent an index or an offset.
+        addend: u16,
+    };
     /// An absolute memory address.
     pub const Abs = union(enum) {
         /// The address is known and fixed and does not change.
@@ -279,15 +287,9 @@ pub const Inst = struct {
         //                       "resolved" is a bad because it was never unresolved to begin with.
         fixed: u16,
         /// The memory address is unknown and yet to be resolved by the linker.
-        // Design decision note: "block" is too specific of a name.
         unres: UnresAddr,
-        ///// The current address of this word subtracted by the given offset.
-        //current: struct {
-        //    // TODO: decl_i
-        //    //decl_index: @import("../../Module.zig").Decl.Index,
-        //    // TODO: this and all other identifiers to "off"
-        //    offset: u16,
-        //},
+        /// The address of a declaration.
+        decl: DeclAddr,
     };
 
     /// Returns the size of this instruction, including opcode and operand.
@@ -342,10 +344,9 @@ pub const Inst = struct {
             .abs, .x_abs, .y_abs, .ind_abs => switch (inst.data.abs) {
                 .fixed => |addr| std.fmt.bufPrint(buf, "{s} {s}${X:0>4}{s}", .{ opcode_mnemonic, prefix, addr, suffix }),
                 // TODO: this shouldn't be emitted on -femit-asm; resolve this beforehand to `fixed`
-                .unres => |unres| std.fmt.bufPrint(buf, "{s} {s}$???? + {d}{s}", .{ opcode_mnemonic, prefix, unres.addend, suffix }),
-                //.current => @panic("TODO"),
+                inline .unres, .decl => |unres| std.fmt.bufPrint(buf, "{s} {s}$???? + {d}{s}", .{ opcode_mnemonic, prefix, unres.addend, suffix }),
             },
-            .rel => std.fmt.bufPrint(buf, "{s} {c}{d}", .{ opcode_mnemonic, @as(u8, if (inst.data.rel < 0) '-' else '+'), inst.data.rel }),
+            .rel => std.fmt.bufPrint(buf, "{s} {d:1}", .{ opcode_mnemonic, inst.data.rel }),
         };
         return slice catch unreachable;
     }

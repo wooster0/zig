@@ -98,6 +98,9 @@ err_msg: *Module.ErrorMsg = undefined,
 /// all other branches contain runtime-known values.
 branches: std.ArrayListUnmanaged(Branch) = .{},
 
+// The key is a block AIR instruction.
+blocks: std.AutoHashMapUnmanaged(Air.Inst.Index, Block) = .{},
+
 /// The MIR output of this codegen.
 mir_instructions: std.MultiArrayList(Mir.Inst) = .{},
 //mir_extra: std.ArrayListUnmanaged(u32) = .{},
@@ -185,6 +188,7 @@ fn deinit(func: *Func) void {
     for (func.branches.items) |*branch|
         branch.deinit(allocator);
     func.branches.deinit(allocator);
+    func.blocks.deinit(allocator);
     func.mir_instructions.deinit(allocator);
 }
 
@@ -316,6 +320,19 @@ const Branch = struct {
 fn getCurrentBranch(func: *Func) *Branch {
     return &func.branches.items[func.branches.items.len - 1];
 }
+
+// A block is a setup to be able to jump to the end.
+const Block = struct {
+    /// This represents instructions in the block that break out of the block whose
+    /// break addresses we have to fill in at the end.
+    brs: std.ArrayListUnmanaged(Mir.Inst.Index),
+    /// A block also acts as a receptacle for break operands; this value will be overwritten by them.
+    /// The first break instruction encounters `MV.none` here and chooses a
+    /// machine code value for the block result, populating this field.
+    /// All following break instructions encounter that value and use it for
+    /// the location to store their block result.
+    val: MV,
+};
 
 const CallMVs = struct {
     args: []MV,
@@ -1611,12 +1628,24 @@ pub fn addInst(func: *Func, tag: Mir.Inst.Tag, data: Mir.Inst.Data) !void {
     }
     try func.mir_instructions.append(func.getAllocator(), inst);
 }
-/// Returns the last MIR instruction added.
-fn getCurrentInst(func: *Func) struct { tag: *Mir.Inst.Tag, data: *Mir.Inst.Data } {
-    return .{
-        .tag = &func.mir_instructions.items(.tag)[func.mir_instructions.len - 1],
-        .data = &func.mir_instructions.items(.data)[func.mir_instructions.len - 1],
-    };
+/// Returns the index of the last MIR instruction added.
+fn getPreviousInst(func: *Func) Mir.Inst.Index {
+    return @intCast(Mir.Inst.Index, func.mir_instructions.len - 1);
+}
+/// Returns the code size of this function up to this point.
+// TODO: rename getSize to getTypeSize and getLength to getCodeSize
+fn getLength(func: *Func) u16 {
+    var size: u16 = 0;
+    var i: u16 = 0;
+    while (i < func.mir_instructions.len) : (i += 1) {
+        const inst = Mir.Inst{
+            .tag = func.mir_instructions.items(.tag)[i],
+            .data = func.mir_instructions.items(.data)[i],
+        };
+        log.debug("inst: {}", .{inst});
+        size += inst.getSize();
+    }
+    return size;
 }
 
 //
@@ -2020,9 +2049,9 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .not => try func.fail("TODO: implement not", .{}),
         // TODO: this tag should be called .bit_cast
         .bitcast => try func.airBitCast(inst),
-        .block => try func.fail("TODO: implement block", .{}),
-        .loop => try func.fail("TODO: implement loop", .{}),
-        .br => try func.fail("TODO: implement br", .{}),
+        .block => try func.airBlock(inst),
+        .loop => try func.airLoop(inst),
+        .br => try func.airBr(inst),
         .breakpoint => try func.airBreakpoint(inst),
         .ret_addr => try func.fail("TODO: implement ret_addr", .{}),
         .frame_addr => try func.fail("TODO: implement frame_addr", .{}),
@@ -2392,6 +2421,91 @@ fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
     _ = ty_op.ty;
     const res = try func.resolveInst(ty_op.operand);
     func.finishAir(inst, res, &.{ty_op.operand});
+}
+
+fn airBlock(func: *Func, inst: Air.Inst.Index) !void {
+    try func.blocks.putNoClobber(func.getAllocator(), inst, .{
+        .brs = .{},
+        .val = MV{ .none = {} },
+    });
+    defer func.blocks.getPtr(inst).?.brs.deinit(func.getAllocator());
+
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const res_ty = func.air.getRefType(ty_pl.ty);
+    _ = res_ty;
+    const extra = func.air.extraData(Air.Block, ty_pl.payload);
+    const body = func.air.extra[extra.end..][0..extra.data.body_len];
+
+    // At least one break will be allocated by an `airBr` as part of this body generation.
+    try func.genBody(body);
+    assert(func.blocks.get(inst).?.brs.items.len >= 1);
+    const offset = func.getLength();
+    const br_addr = .{ .abs = .{ .decl = .{ .index = func.getDeclIndex(), .addend = offset } } };
+
+    // Fill in all breaks, each representing one `airBr`.
+    for (func.blocks.getPtr(inst).?.brs.items) |br| {
+        assert(func.mir_instructions.items(.tag)[br] == .jmp_abs);
+        func.mir_instructions.items(.data)[br] = br_addr;
+    }
+
+    const res = func.blocks.get(inst).?.val;
+    func.finishAir(inst, res, &.{});
+}
+
+fn airLoop(func: *Func, inst: Air.Inst.Index) !void {
+    // A loop is a setup to be able to jump back to the beginning.
+    const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
+    const res_ty = func.air.getRefType(ty_pl.ty);
+    assert(res_ty.eql(Type.initTag(.noreturn), func.getMod()));
+    const loop = func.air.extraData(Air.Block, ty_pl.payload);
+    const body = func.air.extra[loop.end..][0..loop.data.body_len];
+
+    // TODO: this is for a branch instruction
+    //const before = func.getLength();
+    //try func.genBody(body);
+    //const after = func.getLength();
+    //const offset = after - before;
+
+    const offset = func.getLength();
+    try func.genBody(body);
+
+    // To repeat the loop set the program counter to this function's address plus the body's code size.
+    // TODO: use a convenient branch instruction once we track flags properly
+    try func.addInst(
+        .jmp_abs,
+        .{ .abs = .{ .decl = .{ .index = func.getDeclIndex(), .addend = offset } } },
+    );
+    func.finishAir(inst, .none, &.{});
+}
+
+fn airBr(func: *Func, inst: Air.Inst.Index) !void {
+    const branch = func.air.instructions.items(.data)[inst].br;
+    const block = func.blocks.getPtr(branch.block_inst).?;
+    if (func.air.typeOf(branch.operand).hasRuntimeBitsIgnoreComptime()) {
+        const op = try func.resolveInst(branch.operand);
+        if (block.val == .none) {
+            // This is the first branch out of this block.
+            block.val = switch (op) {
+                .none => unreachable,
+                .imm => @panic("TODO"),
+                .reg, .zp, .abs, .zp_abs, .abs_unres => op,
+            };
+        } else {
+            // Some other instruction has previously branched out of this block.
+            @panic("TODO");
+        }
+    }
+
+    // Emit a placeholder for the break address of the instruction that will break out from the block that we're in.
+    // `airBlock` will fill this placeholder in for us because only it knows the break address.
+    // We will only fill in so much that getLength can still tell the final size of this instruction.
+    // We cannot do the optimization of a branch instruction instead of a jump instruction to
+    // save one byte here because there may be more than one break and the instruction that will
+    // ultimately end up at each break's placeholder may differ.
+    try func.addInst(.jmp_abs, .{ .abs = undefined });
+    try block.brs.append(func.getAllocator(), func.getPreviousInst());
+
+    func.finishAir(inst, .none, &.{branch.operand});
 }
 
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {

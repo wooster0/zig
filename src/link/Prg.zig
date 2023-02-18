@@ -68,6 +68,9 @@ zp_free: ?std.BoundedArray(u8, 256) = null,
 pub const base_tag: File.Tag = .prg;
 
 /// A function or a symbol.
+// TODO: we previously defined the word "block" to mean "function or symbol" but now we no longer actually need this distinction;
+//       it doesn't matter whether it's a function or a symbol; it's all just bytes. Consider using the more widely understood word "symbol" instead.
+//       This would be more compatible with other terminology. Also make this change in Mir.zig and rename unres to sym (which solves a related TODO there too)
 const Block = struct {
     /// This is mutable so that we can fix up unresolved addresses and resolve them.
     /// This is nullable because we might record a block's existence but do not have its code yet.
@@ -97,9 +100,11 @@ pub const UnresAddr = struct {
     /// Where in this block's code the resolved address is to be written.
     code_offset: u16,
     /// The index of the block whose address should be resolved.
-    block_index: u16,
+    /// If null, resolve a declaration's address instead.
+    block_index: ?u16,
     /// This is to be added to the absolute memory address once it is resolved.
     /// This might represent an index or an offset into the data.
+    // TODO: this or a different addend in 6502 might have to be i17 at some point
     addend: u16,
     /// This determines whether to resolve this address to its low or high byte half, if either.
     half: ?u1,
@@ -411,31 +416,36 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     for (prg.unres_addrs.items) |unres_addr| {
         log.debug("resolving {}...", .{unres_addr});
 
-        // Figure out the address of `unres_addr.block_index`.
+        // Go through all code of the binary and keep track of the offset until we find what we're looking for.
         var offset: u16 = 0;
-        const blk_addr = (for (decl_index_and_blocks) |decl_index_and_block| {
-            const block = decl_index_and_block.block;
-            const code = block.code.?;
-            assert(code.len != 0);
-            if (unres_addr.block_index == block.index) {
+        const res_addr = for (decl_index_and_blocks) |decl_index_and_block| {
+            // We want to know either a specific block's address or a declaration's address.
+            const found = if (unres_addr.block_index) |unres_addr_block_index|
+                unres_addr_block_index == decl_index_and_block.block.index
+            else
+                unres_addr.decl_index == decl_index_and_block.decl_index;
+            if (found) {
                 const load_address = prg.getLoadAddress();
-                break load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
+                const current_address = load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
+                break current_address;
             }
+            const code = decl_index_and_block.block.code.?;
+            assert(code.len != 0);
             offset += @intCast(u16, code.len);
-        } else unreachable) + unres_addr.addend;
+        } else unreachable;
+        const addr = @intCast(u16, res_addr + unres_addr.addend);
 
         var owner_block = for (decl_index_and_blocks) |decl_index_and_block| {
             if (decl_index_and_block.decl_index == unres_addr.decl_index)
                 break decl_index_and_block.block;
         } else unreachable;
 
-        log.debug("resolved address {} as 0x{X:0>4}", .{ unres_addr, blk_addr });
-
+        var code = owner_block.code.?[unres_addr.code_offset..];
         if (unres_addr.half) |half| {
-            const addr_halves = @bitCast([2]u8, blk_addr);
-            owner_block.code.?[unres_addr.code_offset..][0] = addr_halves[half];
+            const addr_halves = @bitCast([2]u8, addr);
+            code[0] = addr_halves[half];
         } else {
-            mem.writeIntLittle(u16, @ptrCast(*[2]u8, owner_block.code.?[unres_addr.code_offset..][0..2]), blk_addr);
+            mem.writeIntLittle(u16, @ptrCast(*[2]u8, code[0..2]), addr);
         }
     }
 
@@ -444,8 +454,7 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
     var offset: u16 = 0;
     try file_flush.ensureUnusedCapacity(prg.base.allocator, decl_index_and_blocks.len);
     for (decl_index_and_blocks) |decl_index_and_block| {
-        const block = decl_index_and_block.block;
-        const code = block.code.?;
+        const code = decl_index_and_block.block.code.?;
         assert(code.len != 0);
         const load_address = prg.getLoadAddress();
         const addr = load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;

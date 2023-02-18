@@ -121,33 +121,23 @@ fn emitAbsoluteAddress(emit: *Emit, abs_addr: Mir.Inst.Abs) !void {
                 });
             } else unreachable;
         },
-        //.current => |current| {
-        //    _ = current;
-        //    @panic("TODO");
-        //    //const addr = if (emit.bin_file.cast(link.File.Prg)) |prg| addr: {
-        //    //    const load_address = prg.getLoadAddress();
-        //    //    var program_size = emit.getProgramSize()
-        //    //    // note that our program is loaded at the load address so
-        //    //    // subtract the size of the address itself
-        //    //    - @sizeOf(@TypeOf(load_address));
-        //    //    var program_index: u16 = 0;
-        //    //    const decl_index_and_blocks = try prg.getAllBlocks(emit.bin_file.allocator);
-        //    //    defer emit.bin_file.allocator.free(decl_index_and_blocks);
-        //    //    break :addr for (decl_index_and_blocks) |decl_index_and_block| {
-        //    //        if (decl_index_and_block.decl_index == current.decl_index) {
-        //    //            break :addr load_address + program_size + program_index
-        //    //            // - 3 for JMP + absolute address
-        //    //                -
-        //    //                3
-        //    //            // correct off-by-one
-        //    //            + 1;
-        //    //        }
-        //    //        if (decl_index_and_block.block.code) |code|
-        //    //            program_index += @intCast(u16, code.len);
-        //    //    } else unreachable;
-        //    //} else unreachable;
-        //    //try emit.emitWord(addr);
-        //},
+        .decl => |decl| {
+            // We are currently emitting a single function's code and we can not
+            // resolve this absolute address in this function before we have the code of all
+            // other functions, so we will let the linker fix this up later and emit
+            // a placeholder for now.
+            const code_offset = emit.getCodeOffset();
+            try emit.emitWord(undefined);
+            if (emit.bin_file.cast(link.File.Prg)) |prg| {
+                try prg.unres_addrs.append(emit.bin_file.allocator, .{
+                    .decl_index = decl.index,
+                    .code_offset = code_offset,
+                    .block_index = null,
+                    .addend = decl.addend,
+                    .half = null,
+                });
+            } else unreachable;
+        },
     }
 }
 
