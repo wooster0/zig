@@ -2460,17 +2460,10 @@ fn airLoop(func: *Func, inst: Air.Inst.Index) !void {
     const loop = func.air.extraData(Air.Block, ty_pl.payload);
     const body = func.air.extra[loop.end..][0..loop.data.body_len];
 
-    // TODO: this is for a branch instruction
-    //const before = func.getLength();
-    //try func.genBody(body);
-    //const after = func.getLength();
-    //const offset = after - before;
-
     const offset = func.getLength();
     try func.genBody(body);
 
     // To repeat the loop set the program counter to this function's address plus the body's code size.
-    // TODO: use a convenient branch instruction once we track flags properly
     try func.addInst(
         .jmp_abs,
         .{ .abs = .{ .decl = .{ .index = func.getDeclIndex(), .addend = offset } } },
@@ -2479,33 +2472,30 @@ fn airLoop(func: *Func, inst: Air.Inst.Index) !void {
 }
 
 fn airBr(func: *Func, inst: Air.Inst.Index) !void {
-    const branch = func.air.instructions.items(.data)[inst].br;
-    const block = func.blocks.getPtr(branch.block_inst).?;
-    if (func.air.typeOf(branch.operand).hasRuntimeBitsIgnoreComptime()) {
-        const op = try func.resolveInst(branch.operand);
+    const br = func.air.instructions.items(.data)[inst].br;
+    const block = func.blocks.getPtr(br.block_inst).?;
+    if (func.air.typeOf(br.operand).hasRuntimeBitsIgnoreComptime()) {
+        const op = try func.resolveInst(br.operand);
         if (block.val == .none) {
-            // This is the first branch out of this block.
+            // This is the first break out of this block.
             block.val = switch (op) {
                 .none => unreachable,
                 .imm => @panic("TODO"),
                 .reg, .zp, .abs, .zp_abs, .abs_unres => op,
             };
         } else {
-            // Some other instruction has previously branched out of this block.
+            // Some other instruction has previously breaked out of this block.
             @panic("TODO");
         }
     }
 
     // Emit a placeholder for the break address of the instruction that will break out from the block that we're in.
     // `airBlock` will fill this placeholder in for us because only it knows the break address.
-    // We will only fill in so much that getLength can still tell the final size of this instruction.
-    // We cannot do the optimization of a branch instruction instead of a jump instruction to
-    // save one byte here because there may be more than one break and the instruction that will
-    // ultimately end up at each break's placeholder may differ.
+    // We will fill in enough so that we can still tell the final size of this instruction.
     try func.addInst(.jmp_abs, .{ .abs = undefined });
     try block.brs.append(func.getAllocator(), func.getPreviousInst());
 
-    func.finishAir(inst, .none, &.{branch.operand});
+    func.finishAir(inst, .none, &.{br.operand});
 }
 
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {

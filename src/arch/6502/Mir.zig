@@ -149,13 +149,7 @@ pub const Inst = struct {
             return std.meta.stringToEnum(AddrMode, parts.rest()).?;
         }
 
-        // TODO: rename to `getAffected` and add `.mem` as another possibility and start tracking
-        //       all of addressable memory (all zp and abs addresses) to optimize out ST* instructions etc.?
-        //       in that case start tracking the status register through this too: `.stat`.
-        //       this function would basically tell us about the semantics of an opcode.
-        /// Returns the register that could be affected by the execution of this opcode,
-        /// excluding the status register.
-        /// "Could" because a register's value might stay the same after execution of this opcode.
+        /// Returns the register affected by execution of the given opcode.
         pub fn getAffectedReg(tag: Tag) ?Reg {
             return switch (tag) {
                 .brk_impl => null,
@@ -205,9 +199,6 @@ pub const Inst = struct {
                 .sed_impl => null,
             };
         }
-
-        // TODO: getAffectedFlag for safety. this makes it impossible to accidentally clobber a flag.
-        //       this will be even more important later on if/when we use flags for different meanings.
 
         test getOpcodeMnemonic {
             try testing.expectEqualStrings("nop", getOpcodeMnemonic(.nop_impl));
