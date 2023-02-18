@@ -2126,8 +2126,8 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .bool_and => try func.fail("TODO: implement bool_and", .{}),
         .bool_or => try func.fail("TODO: implement bool_or", .{}),
         .load => try func.airLoad(inst),
-        .ptrtoint => try func.fail("TODO: implement ptrtoint", .{}),
-        .bool_to_int => try func.fail("TODO: implement bool_to_int", .{}),
+        .ptrtoint => try func.airPtrToInt(inst),
+        .bool_to_int => try func.airBoolToInt(inst),
         .ret => try func.airRet(inst),
         .ret_load => try func.fail("TODO: implement ret_load", .{}),
         .store => try func.airStore(inst),
@@ -2626,6 +2626,20 @@ fn airLoad(func: *Func, inst: Air.Inst.Index) !void {
         break :res dst;
     };
     func.finishAir(inst, res, &.{ty_op.operand});
+}
+
+fn airPtrToInt(func: *Func, inst: Air.Inst.Index) !void {
+    // This is only a change at the type system level.
+    const un_op = func.air.instructions.items(.data)[inst].un_op;
+    const res = try func.resolveInst(un_op);
+    func.finishAir(inst, res, &.{un_op});
+}
+
+fn airBoolToInt(func: *Func, inst: Air.Inst.Index) !void {
+    // This is only a change at the type system level.
+    const un_op = func.air.instructions.items(.data)[inst].un_op;
+    const res = try func.resolveInst(un_op);
+    func.finishAir(inst, res, &.{un_op});
 }
 
 fn airRet(func: *Func, inst: Air.Inst.Index) !void {
