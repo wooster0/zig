@@ -89,11 +89,26 @@ pub const Inst = struct {
         // Instructions are sorted by opcode.
         // zig fmt: off
         brk_impl     = 0x00, // BRK          ; BReaK
+        ora_zp       = 0x05, // ORA $XX      ; OR A
+        ora_imm      = 0x09, // ORA          ; OR A
+        ora_abs      = 0x0D, // ORA $XXXX    ; OR A
+        ora_x_zp     = 0x15, // ORA $XX, X   ; OR A
+        ora_x_abs    = 0x1D, // ORA $XXXX, X ; OR A
         clc_impl     = 0x18, // CLC          ; CLear Carry
         jsr_abs      = 0x20, // JSR $XXXX    ; Jump to SubRoutine
+        and_zp       = 0x25, // AND $XX      ; AND
+        and_imm      = 0x29, // AND #$XX     ; AND
+        and_abs      = 0x2D, // AND $XXXX    ; AND
+        and_x_zp     = 0x35, // AND $XX, X   ; AND
         sec_impl     = 0x38, // SEC          ; SEt Carry
+        and_x_abs    = 0x3D, // AND $XXXX, X ; AND
+        eor_zp       = 0x45, // EOR $XX      ; Exclusive OR
         pha_impl     = 0x48, // PHA          ; PusH A
+        eor_imm      = 0x49, // EOR #$XX     ; Exclusive OR
         jmp_abs      = 0x4C, // JMP $XXXX    ; JuMP
+        eor_abs      = 0x4D, // EOR $XXXX    ; Exclusive OR
+        eor_x_zp     = 0x55, // EOR $XX, X   ; Exclusive OR
+        eor_x_abs    = 0x5D, // EOR $XXXX, X ; Exclusive OR
         rts_impl     = 0x60, // RTS          ; ReTurn from Subroutine
         adc_zp       = 0x65, // ADC $XX      ; ADd with Carry
         adc_imm      = 0x69, // ADC #$XX     ; ADd with Carry
@@ -106,13 +121,16 @@ pub const Inst = struct {
         sty_zp       = 0x84, // STY $XX      ; STore Y
         sta_zp       = 0x85, // STA $XX      ; STore A
         stx_zp       = 0x86, // STX $XX      ; STore X
+        dey_impl     = 0x88, // DEY          ; DEcrement Y
         txa_impl     = 0x8A, // TXA          ; Transfer X to A
         sty_abs      = 0x8C, // STY $XXXX    ; STore Y
         sta_abs      = 0x8D, // STA $XXXX    ; STore A
         stx_abs      = 0x8E, // STX $XXXX    ; STore X
         bcc_rel      = 0x90, // BCC $XX      ; Branch on Carry Clear
         sta_ind_y_zp = 0x91, // STA ($XX), Y ; STore A
+        sta_x_zp     = 0x95, // STA $XX, X   ; STore A
         tya_impl     = 0x98, // TYA          ; Transfer Y to A
+        sta_x_abs    = 0x9D, // STA $XXXX, X ; STore A
         ldy_imm      = 0xA0, // LDY #$XX     ; LoaD Y
         lda_x_ind_zp = 0xA1, // LDX ($XX, X) ; LoaD X
         ldx_imm      = 0xA2, // LDX #$XX     ; LoaD X
@@ -126,12 +144,25 @@ pub const Inst = struct {
         lda_abs      = 0xAD, // LDA $XXXX    ; LoaD A
         ldx_abs      = 0xAE, // LDX $XXXX    ; LoaD X
         lda_ind_y_zp = 0xB1, // LDA ($XX), Y ; LoaD A
+        lda_x_zp     = 0xB5, // LDA $XX, X   ; LoaD A
         lda_x_abs    = 0xBD, // STA $XXXX, X ; STore A
+        cpy_imm      = 0xC0, // CPY #$XX     ; ComPare Y
+        cmp_zp       = 0xC5, // CMP $XX      ; CoMPare
+        dec_zp       = 0xC6, // DEC $XX      ; DECrement
+        iny_impl     = 0xC8, // INY          ; INcrement Y
+        dex_impl     = 0xCA, // DEX          ; DEcrement X
+        cmp_abs      = 0xCD, // CMP $XXXX    ; CoMPare
+        dec_abs      = 0xCE, // DEC $XXXX    ; DECrement
+        bne_rel      = 0xD0, // BNE $XX      ; Branch on Not Equal
         cld_impl     = 0xD8, // CLD          ; CLear Decimal
+        cpx_imm      = 0xE0, // CPX #$XX     ; ComPare X
         sbc_zp       = 0xE5, // SBC $XX      ; SuBtract with Carry
+        inc_zp       = 0xE6, // INC $XX      ; INCrement
+        inx_impl     = 0xE8, // INX          ; INcrement X
         sbc_imm      = 0xE9, // SBC #$XX     ; SuBtract with Carry
         nop_impl     = 0xEA, // NOP          ; No OPeration
         sbc_abs      = 0xED, // SBC $XXXX    ; SuBtract with Carry
+        inc_abs      = 0xEE, // INC $XXXX    ; INCrement
         sed_impl     = 0xF8, // SED          ; SEt Decimal
         // zig fmt: on
 
@@ -153,11 +184,26 @@ pub const Inst = struct {
         pub fn getAffectedReg(tag: Tag) ?Reg {
             return switch (tag) {
                 .brk_impl => null,
+                .ora_zp => .a,
+                .ora_imm => .a,
+                .ora_abs => .a,
+                .ora_x_zp => .a,
+                .ora_x_abs => .a,
                 .clc_impl => null,
                 .jsr_abs => null,
+                .and_zp => .a,
+                .and_imm => .a,
+                .and_abs => .a,
+                .and_x_zp => .a,
                 .sec_impl => null,
+                .and_x_abs => .a,
+                .eor_zp => .a,
                 .pha_impl => null,
+                .eor_imm => .a,
                 .jmp_abs => null,
+                .eor_abs => .a,
+                .eor_x_zp => .a,
+                .eor_x_abs => .a,
                 .rts_impl => null,
                 .adc_zp => .a,
                 .adc_imm => .a,
@@ -170,13 +216,16 @@ pub const Inst = struct {
                 .sty_zp => null,
                 .sta_zp => null,
                 .stx_zp => null,
+                .dey_impl => .y,
                 .txa_impl => .a,
                 .sty_abs => null,
                 .sta_abs => null,
                 .stx_abs => null,
                 .bcc_rel => null,
                 .sta_ind_y_zp => null,
+                .sta_x_zp => null,
                 .tya_impl => .a,
+                .sta_x_abs => null,
                 .ldy_imm => .y,
                 .lda_x_ind_zp => .a,
                 .ldx_imm => .x,
@@ -190,12 +239,25 @@ pub const Inst = struct {
                 .lda_abs => .a,
                 .ldx_abs => .x,
                 .lda_ind_y_zp => .a,
+                .lda_x_zp => .a,
                 .lda_x_abs => .a,
+                .cpy_imm => null,
+                .cmp_zp => null,
+                .dec_zp => null,
+                .iny_impl => .y,
+                .dex_impl => .x,
+                .cmp_abs => null,
+                .dec_abs => null,
+                .bne_rel => null,
                 .cld_impl => null,
+                .cpx_imm => null,
                 .sbc_zp => .a,
+                .inc_zp => null,
+                .inx_impl => .x,
                 .sbc_imm => .a,
                 .nop_impl => null,
                 .sbc_abs => .a,
+                .inc_abs => null,
                 .sed_impl => null,
             };
         }
@@ -283,8 +345,8 @@ pub const Inst = struct {
         decl: DeclAddr,
     };
 
-    /// Returns the size of this instruction, including opcode and operand.
-    pub fn getByteSize(inst: Inst) u2 {
+    /// Returns the size of this instruction in bytes, including opcode and operand.
+    pub fn getSize(inst: Inst) u2 {
         const addr_mode = inst.tag.getAddrMode();
         const operand_size: u2 = switch (addr_mode) {
             .impl => 0,
@@ -344,25 +406,27 @@ pub const Inst = struct {
 
     // TODO: function for calculating a program's total exact cycles? and execution time using hertz
 
-    test getByteSize {
-        try testing.expectEqual(@as(u2, 1), getByteSize(.{ .tag = .nop_impl, .data = .{ .none = {} } }));
-        try testing.expectEqual(@as(u2, 1), getByteSize(.{ .tag = .brk_impl, .data = .{ .none = {} } }));
-        try testing.expectEqual(@as(u2, 2), getByteSize(.{ .tag = .adc_imm, .data = .{ .imm = 0x20 } }));
-        try testing.expectEqual(@as(u2, 2), getByteSize(.{ .tag = .adc_x_ind_zp, .data = .{ .zp = 0x40 } }));
-        try testing.expectEqual(@as(u2, 2), getByteSize(.{ .tag = .sty_zp, .data = .{ .zp = 0xFF } }));
-        try testing.expectEqual(@as(u2, 3), getByteSize(.{ .tag = .lda_x_abs, .data = .{ .abs = .{ .fixed = 0xABCD } } }));
-        try testing.expectEqual(@as(u2, 3), getByteSize(.{ .tag = .lda_abs, .data = .{ .abs = .{ .fixed = 0x0801 } } }));
+    test getSize {
+        try testing.expectEqual(@as(u2, 1), getSize(.{ .tag = .nop_impl, .data = .{ .none = {} } }));
+        try testing.expectEqual(@as(u2, 1), getSize(.{ .tag = .brk_impl, .data = .{ .none = {} } }));
+        try testing.expectEqual(@as(u2, 2), getSize(.{ .tag = .adc_imm, .data = .{ .imm = .{ .val = 0x20 } } }));
+        try testing.expectEqual(@as(u2, 2), getSize(.{ .tag = .adc_x_ind_zp, .data = .{ .zp = 0x40 } }));
+        try testing.expectEqual(@as(u2, 2), getSize(.{ .tag = .sty_zp, .data = .{ .zp = 0xFF } }));
+        try testing.expectEqual(@as(u2, 3), getSize(.{ .tag = .lda_x_abs, .data = .{ .abs = .{ .fixed = 0xABCD } } }));
+        try testing.expectEqual(@as(u2, 3), getSize(.{ .tag = .lda_abs, .data = .{ .abs = .{ .fixed = 0x0801 } } }));
     }
 
     test getTextRepr {
         var buf: [20]u8 = undefined;
         try testing.expectEqualStrings("NOP", getTextRepr(.{ .tag = .nop_impl, .data = .{ .none = {} } }, &buf));
-        try testing.expectEqualStrings("LDA #4", getTextRepr(.{ .tag = .lda_imm, .data = .{ .imm = 4 } }, &buf));
-        try testing.expectEqualStrings("LDA #$0F", getTextRepr(.{ .tag = .lda_imm, .data = .{ .imm = 0x0F } }, &buf));
         try testing.expectEqualStrings("LDA $EE", getTextRepr(.{ .tag = .lda_zp, .data = .{ .zp = 0xEE } }, &buf));
         try testing.expectEqualStrings("STA $02", getTextRepr(.{ .tag = .sta_zp, .data = .{ .zp = 0x02 } }, &buf));
+        try testing.expectEqualStrings("BCC +16", getTextRepr(.{ .tag = .bcc_rel, .data = .{ .rel = 16 } }, &buf));
+        try testing.expectEqualStrings("BCC -32", getTextRepr(.{ .tag = .bcc_rel, .data = .{ .rel = -32 } }, &buf));
         try testing.expectEqualStrings("STA ($20, X)", getTextRepr(.{ .tag = .sta_x_ind_zp, .data = .{ .zp = 0x20 } }, &buf));
         try testing.expectEqualStrings("ADC ($AD), Y", getTextRepr(.{ .tag = .adc_ind_y_zp, .data = .{ .zp = 0xAD } }, &buf));
+        try testing.expectEqualStrings("LDA #$04", getTextRepr(.{ .tag = .lda_imm, .data = .{ .imm = .{ .val = 4 } } }, &buf));
+        try testing.expectEqualStrings("LDA #$0F", getTextRepr(.{ .tag = .lda_imm, .data = .{ .imm = .{ .val = 0x0F } } }, &buf));
         try testing.expectEqualStrings("STX $0100", getTextRepr(.{ .tag = .stx_abs, .data = .{ .abs = .{ .fixed = 0x0100 } } }, &buf));
         try testing.expectEqualStrings("STY $ABCD", getTextRepr(.{ .tag = .sty_abs, .data = .{ .abs = .{ .fixed = 0xABCD } } }, &buf));
         try testing.expectEqualStrings("ADC $FFFF, X", getTextRepr(.{ .tag = .adc_x_abs, .data = .{ .abs = .{ .fixed = 0xFFFF } } }, &buf));
@@ -370,7 +434,7 @@ pub const Inst = struct {
     }
 };
 
-// TODO: are these tests run as part of `zig build test`, too?
+// TODO(meeting): are these tests run as part of `zig build test`, too?
 comptime {
     _ = Inst;
 }

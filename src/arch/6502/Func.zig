@@ -40,8 +40,8 @@ const RegMem = @import("RegMem.zig");
 // TODO: review missed optimizations opportunities: https://www.nesdev.org/wiki/6502_assembly_optimisations (always consider optimize mode)
 //       * use synthesized instructions using an identity table: https://www.nesdev.org/wiki/Identity_table
 
-// TODO: open issues for these:
-// * cycle-stepped Emulator.zig
+// TODO(meeting): open issues for these things:
+// * cycle-stepped Emu.zig
 // * basic pattern-based optimizations (based on getOptimizeMode):
 //   e.g. eliminate the second LDA in `sta $9FFF; lda $9FFF`
 //   e.g. eliminate the first LDA in `lda #5; lda #6`
@@ -49,8 +49,18 @@ const RegMem = @import("RegMem.zig");
 //   e.g. replace JSR + RTS chain with JMP.
 // * 3-byte exe with `pub fn main() void {}` and `-fno-basic-bootstrap`
 
-// TODO: comment on https://github.com/ziglang/zig/issues/5185
-//       and present the use case for iptr/uptr, idata/udata, and maybe ibyte/ubyte
+// TODO(meeting): of all in-house backends, the 6502 arch is the first to not have any hardware support for SIMD instructions.
+//   there should be a pass for such architectures to turn AIR that includes vector operations into normal ones
+//   so that all architectures that don't have hardware SIMD support don't have to deal with those instructions
+//   in the first place. so, the backend tells the frontend that it wants SIMD ops turned into software ops
+
+// TODO(meeting): comment on https://github.com/ziglang/zig/issues/5185
+//       and present the use case for iptr/uptr, idata/udata, and maybe ibyte/ubyte.
+//       the issue is that indexing an array casts to usize implicitly.
+//       It should allow me to use either `udata` (u8) or `uptr` (u16) as an index into data
+//       assuming that `udata` is smaller than `uptr` on the architecture.
+//       present a use case where codegen for indexing compile-time data would be better
+//       if it allowed using u8 because the data length is <= 255.
 
 const Func = @This();
 
@@ -61,6 +71,7 @@ const Func = @This();
 /// Represents the file for the final output of the whole codegen.
 /// This is the only field that references data preserved across all function codegens.
 // TODO: rename it to just `file`? especially after we support -femit-asm
+// TODO(meeting): how's -femit-asm going to work?
 bin_file: *link.File,
 /// The location in source of this function.
 src_loc: Module.SrcLoc,
@@ -251,25 +262,24 @@ fn getOptimizeMode(func: Func) OptimizeMode {
     };
 }
 
-/// Determines at which amount of loop iterations to inline a loop.
-fn getInlineLoop(func: Func, loop_count: u16) bool {
-    // For now, we use no specific inline threshold but it's rather an
-    // always or a never, but we will still base the decision whether to inline
-    // on a threshold in order to be future-proof.
-    // TODO: if you need this inline threshold for other things, add getInlineThreshold()
-    const inline_threshold: u16 = switch (func.getOptimizeMode()) {
-        // Always inline, meaning code size will be bigger.
-        // Though, the 6502 has no CPU cache, so code size doesn't have a direct impact on performance.
-        // NOTE: after https://github.com/ziglang/zig/issues/978 (TODO: change this note after it's implemented)
-        //       the user could still @optimizeFor(.ReleaseSmall)
-        //       in certain cases where this increases code size too
-        //       excessively.
-        //       then we will probably handle the optimize mode dynamically, anyway.
-        .fast => 0,
-        // Never inline, meaning code size will be bigger.
-        .small => std.math.maxInt(u16),
-    };
-    return loop_count > inline_threshold;
+//
+// Compile option checking
+//
+
+fn checkCompileOptions(func: *Func) !void {
+    const options = func.bin_file.options;
+    // Position-independent code can be executed at any memory address without modification,
+    // whereas absolute code must be loaded at a specific location to function correctly (for example at a load address).
+    // We generate only absolute code because:
+    // * It is the fastest.
+    // * It is the simplest.
+    // * 6502 programs usually have no use case for PIC and there is usually only one program running at a time.
+    // Reference: https://techtinkering.com/articles/position-independent-code-6502-on-the-commodore-vic-20/
+    // TODO(meeting): it's awkward that this even prints a stack trace.
+    //                I didn't put this in the linker because this applies to the architecture itself and
+    //                has nothing to do with the output format.
+    if (options.pic or options.pie)
+        return try func.fail("position-independent code unsupported", .{});
 }
 
 //
@@ -281,7 +291,7 @@ fn getInlineLoop(func: Func, loop_count: u16) bool {
 const MV = union(enum) {
     /// The value has no bits that we could represent at runtime.
     none: void,
-    /// The value is this immediately available byte.
+    /// The value is immediately available.
     imm: u8,
     /// The value is in this one-byte register.
     reg: Reg,
@@ -302,9 +312,9 @@ const MV = union(enum) {
             .zp => |addr| rhs == .zp and rhs.zp == addr,
             .abs => |addr| rhs == .abs and rhs.abs == addr,
             .zp_abs => |addr| rhs == .zp_abs and rhs.zp_abs == addr,
-            .abs_unres => |abs_unres| rhs == .abs_unres and
-                rhs.abs_unres.block_index == abs_unres.block_index and
-                rhs.abs_unres.addend == abs_unres.addend,
+            .abs_unres => |unres| rhs == .abs_unres and
+                rhs.abs_unres.block_index == unres.block_index and
+                rhs.abs_unres.addend == unres.addend,
         };
     }
 };
@@ -466,10 +476,6 @@ fn allocRegMem(
     const bit_size = ty.bitSize(func.getTarget());
     if (bit_size > 8)
         return null;
-    if (bit_size != 8) {
-        // TODO: truncate bits (set to 0)
-        return try func.fail("TODO: allow allocating non-8-bit type to reg", .{});
-    }
     const reg = func.reg_mem.alloc(inst) orelse return null;
     return .{ .reg = reg };
 }
@@ -494,6 +500,7 @@ fn allocAddrOrRegMem(
 //
 
 /// Spills the value of a register to addressable memory to free it for a different purpose.
+// Spilling the register to a different register is not done because it might immediately cause another spill.
 // TODO: merge with freeReg?
 pub fn spillReg(
     func: *Func,
@@ -508,7 +515,7 @@ pub fn spillReg(
     const reg_val = func.getResolvedInst(owner);
     assert(reg_val == .reg); // If this fails, you gave ownership of the register to the wrong operand.
     const ty = Type.u8;
-    const new_home = try func.allocAddrOrRegMem(ty, owner);
+    const new_home = try func.allocAddrMem(ty);
     log.debug("spilling register {}'s {} into {}", .{ reg, reg_val, new_home });
     // DEPRECATED: try func.setAddrOrRegMem(ty, new_home, reg_val);
     try func.trans(reg_val, new_home, ty);
@@ -523,33 +530,192 @@ fn freeReg(func: *Func, reg: Reg, maybe_owner: ?Air.Inst.Index) !MV {
     try func.reg_mem.freeReg(reg, maybe_owner);
     return .{ .reg = reg };
 }
+/// Sets up the given register to be used temporarily.
 fn saveReg(func: *Func, reg: Reg) !RegMem.RegSave {
     return try func.reg_mem.saveReg(reg);
 }
-
-const Flag = enum { decimal, carry };
-fn setFlag(func: *Func, flag: Flag) !void {
-    try switch (flag) {
-        .decimal => func.reg_mem.decimal.set(),
-        .carry => func.reg_mem.carry.set(),
-    };
+fn isRegFree(func: *Func, reg: Reg) bool {
+    return func.reg_mem.isFree(reg);
 }
-fn clearFlag(func: *Func, flag: Flag) !void {
-    try switch (flag) {
-        .decimal => func.reg_mem.decimal.clear(),
-        .carry => func.reg_mem.carry.clear(),
-    };
+fn getRegOwner(func: Func, reg: Reg) ?Air.Inst.Index {
+    return func.reg_mem.getOwner(reg);
 }
-fn resetFlag(func: *Func, flag: Flag) void {
-    switch (flag) {
-        .decimal => func.reg_mem.decimal.state = .unknown,
-        .carry => func.reg_mem.carry.state = .unknown,
-    }
+/// Sets up either of the two index registers to be used temporarily.
+fn saveIndexReg(func: *Func) !RegMem.RegSave {
+    if (func.isRegFree(.x))
+        // Saving and storing will be a no-op.
+        return try func.reg_mem.saveReg(.x);
+    if (func.isRegFree(.y))
+        // Saving and storing will be a no-op.
+        return try func.reg_mem.saveReg(.y);
+    return try func.reg_mem.saveReg(.x);
 }
 
 //
 // Memory interaction
 //
+
+// TODO: I feel like the plan will be to migrate from "the new `trans`" to this more explicit API
+/// Transfers register value of source to destination.
+/// Does not do register management. <-- this will be a defining factor for each API
+fn transReg(func: *Func, src_reg: Reg, dst_reg: Reg) !void {
+    switch (src_reg) {
+        .a => switch (dst_reg) {
+            .a => {},
+            .x => try func.addInst(.tax_impl, .{ .none = {} }),
+            .y => try func.addInst(.tay_impl, .{ .none = {} }),
+        },
+        .x => switch (dst_reg) {
+            .a => try func.addInst(.txa_impl, .{ .none = {} }),
+            .x => {},
+            .y => {
+                const reg_a = try func.saveReg(.a);
+                defer reg_a.restore();
+                try func.addInst(.tax_impl, .{ .none = {} });
+                try func.addInst(.txa_impl, .{ .none = {} });
+            },
+        },
+        .y => switch (dst_reg) {
+            .a => try func.addInst(.tya_impl, .{ .none = {} }),
+            .x => {
+                const reg_a = try func.saveReg(.a);
+                defer reg_a.restore();
+                try func.addInst(.tay_impl, .{ .none = {} });
+                try func.addInst(.tya_impl, .{ .none = {} });
+            },
+            .y => {},
+        },
+    }
+}
+
+// TODO: instead of these two, make a readable helper for transfering specific bytes designated by an index from src to dst?
+//       maybe an optional `index` param to `trans`? a new transByte?
+//       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
+// TODO: as an alternative to the previous TODO, make it more general and turn them into loadReg, storeReg?
+/// Loads into the A register a byte of the given value designated by the index.
+fn loadA(func: *Func, val: MV, index: MV) !void {
+    switch (val) {
+        .none => unreachable,
+        .imm => unreachable,
+        .reg => |reg| switch (reg) {
+            .a => {},
+            .x => try func.addInst(.txa_impl, .{ .none = {} }),
+            .y => try func.addInst(.tya_impl, .{ .none = {} }),
+        },
+        .zp => |addr| switch (index) {
+            .imm => |imm| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, imm) }),
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const reg_x = try func.saveReg(.x);
+                    defer reg_x.restore();
+                    try func.addInst(.tya_impl, .{ .none = {} });
+                    try func.addInst(.tax_impl, .{ .none = {} });
+                    try func.addInst(.lda_x_zp, .{ .zp = addr });
+                },
+                .y => try func.addInst(.lda_x_zp, .{ .zp = addr }),
+            },
+            else => unreachable, // TODO
+        },
+        .abs => |addr| switch (index) {
+            .imm => |imm| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + imm } }),
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.lda_x_abs, .{ .abs = .{ .fixed = addr } }),
+                .y => {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const reg_x = try func.saveReg(.x);
+                    defer reg_x.restore();
+                    try func.addInst(.tya_impl, .{ .none = {} });
+                    try func.addInst(.tax_impl, .{ .none = {} });
+                    try func.addInst(.lda_x_abs, .{ .abs = .{ .fixed = addr } });
+                },
+            },
+            else => unreachable, // TODO
+        },
+        .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+        .abs_unres => |unres| switch (index) {
+            .imm => |imm| try func.addInst(.lda_abs, .{ .abs = .{ .unres = unres.index(imm) } }),
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.lda_x_abs, .{ .abs = .{ .unres = unres } }),
+                .y => {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const reg_x = try func.saveReg(.x);
+                    defer reg_x.restore();
+                    try func.addInst(.tya_impl, .{ .none = {} });
+                    try func.addInst(.tax_impl, .{ .none = {} });
+                    try func.addInst(.lda_x_abs, .{ .abs = .{ .unres = unres } });
+                },
+            },
+            else => unreachable, // TODO
+        },
+    }
+}
+/// Stores the A register's value to a byte of the given value designated by the index.
+fn storeA(func: *Func, val: MV, index: MV) !void {
+    switch (val) {
+        .none => unreachable,
+        .imm => unreachable,
+        .reg => unreachable,
+        .zp => |addr| switch (index) {
+            .imm => |imm| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, imm) }),
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.sta_x_zp, .{ .zp = addr }),
+                .y => {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const reg_x = try func.saveReg(.x);
+                    defer reg_x.restore();
+                    try func.addInst(.tya_impl, .{ .none = {} });
+                    try func.addInst(.tax_impl, .{ .none = {} });
+                    try func.addInst(.sta_x_zp, .{ .zp = addr });
+                },
+            },
+            else => unreachable,
+        },
+        .abs => |addr| switch (index) {
+            .imm => |imm| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + imm } }),
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.sta_x_abs, .{ .abs = .{ .fixed = addr } }),
+                .y => {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const reg_x = try func.saveReg(.x);
+                    defer reg_x.restore();
+                    try func.addInst(.tya_impl, .{ .none = {} });
+                    try func.addInst(.tax_impl, .{ .none = {} });
+                    try func.addInst(.sta_x_abs, .{ .abs = .{ .fixed = addr } });
+                },
+            },
+            else => unreachable,
+        },
+        .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
+        .abs_unres => |unres| switch (index) {
+            .imm => |imm| try func.addInst(.sta_abs, .{ .abs = .{ .unres = unres.index(imm) } }),
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.sta_x_abs, .{ .abs = .{ .unres = unres } }),
+                .y => {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const reg_x = try func.saveReg(.x);
+                    defer reg_x.restore();
+                    try func.addInst(.tya_impl, .{ .none = {} });
+                    try func.addInst(.tax_impl, .{ .none = {} });
+                    try func.addInst(.sta_x_abs, .{ .abs = .{ .unres = unres } });
+                },
+            },
+            else => unreachable,
+        },
+    }
+}
 
 //
 // NOTE: the following is the new memory load-store architecture which unifies all memory operations into a single function.
@@ -564,11 +730,11 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
     switch (src) {
         .none => {},
         .imm => |src_imm| {
-            assert(size == 1);
             switch (dst) {
                 .none => unreachable,
                 .imm => unreachable,
                 .reg => |dst_reg| {
+                    assert(size == 1);
                     switch (dst_reg) {
                         .a => try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } }),
                         .x => try func.addInst(.ldx_imm, .{ .imm = .{ .val = src_imm } }),
@@ -599,11 +765,11 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } });
                     try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr });
                 },
-                .abs_unres => |dst_abs_unres| {
+                .abs_unres => |dst_unres| {
                     const reg_a_save = try func.saveReg(.a);
                     defer reg_a_save.restore();
                     try func.addInst(.lda_imm, .{ .imm = .{ .val = src_imm } });
-                    try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_abs_unres } });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres } });
                 },
             }
         },
@@ -612,312 +778,320 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
             switch (dst) {
                 .none => unreachable,
                 .imm => unreachable,
-                .reg => |dst_reg| {
-                    switch (src_reg) {
-                        .a => {
-                            switch (dst_reg) {
-                                .a => {},
-                                .x => try func.addInst(.tax_impl, .{ .none = {} }),
-                                .y => try func.addInst(.tay_impl, .{ .none = {} }),
-                            }
-                        },
-                        .x => {
-                            switch (dst_reg) {
-                                .a => try func.addInst(.txa_impl, .{ .none = {} }),
-                                .x => {},
-                                .y => unreachable, // TODO
-                            }
-                        },
-                        .y => {
-                            switch (dst_reg) {
-                                .a => try func.addInst(.tya_impl, .{ .none = {} }),
-                                .x => unreachable, // TODO
-                                .y => {},
-                            }
-                        },
-                    }
+                .reg => |dst_reg| switch (src_reg) {
+                    .a => switch (dst_reg) {
+                        .a => {},
+                        .x => try func.addInst(.tax_impl, .{ .none = {} }),
+                        .y => try func.addInst(.tay_impl, .{ .none = {} }),
+                    },
+                    .x => switch (dst_reg) {
+                        .a => try func.addInst(.txa_impl, .{ .none = {} }),
+                        .x => {},
+                        .y => unreachable, // TODO
+                    },
+                    .y => switch (dst_reg) {
+                        .a => try func.addInst(.tya_impl, .{ .none = {} }),
+                        .x => unreachable, // TODO
+                        .y => {},
+                    },
                 },
-                .zp => |dst_addr| {
-                    switch (src_reg) {
-                        .a => try func.addInst(.sta_zp, .{ .zp = dst_addr }),
-                        .x => try func.addInst(.stx_zp, .{ .zp = dst_addr }),
-                        .y => try func.addInst(.sty_zp, .{ .zp = dst_addr }),
-                    }
+                .zp => |dst_addr| switch (src_reg) {
+                    .a => try func.addInst(.sta_zp, .{ .zp = dst_addr }),
+                    .x => try func.addInst(.stx_zp, .{ .zp = dst_addr }),
+                    .y => try func.addInst(.sty_zp, .{ .zp = dst_addr }),
                 },
-                .abs => |dst_addr| {
-                    switch (src_reg) {
-                        .a => try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr } }),
-                        .x => try func.addInst(.stx_abs, .{ .abs = .{ .fixed = dst_addr } }),
-                        .y => try func.addInst(.sty_abs, .{ .abs = .{ .fixed = dst_addr } }),
-                    }
+                .abs => |dst_addr| switch (src_reg) {
+                    .a => try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr } }),
+                    .x => try func.addInst(.stx_abs, .{ .abs = .{ .fixed = dst_addr } }),
+                    .y => try func.addInst(.sty_abs, .{ .abs = .{ .fixed = dst_addr } }),
                 },
                 .zp_abs => |dst_addr| {
                     assert(ty.zigTypeTag() != .Pointer);
-                    // TODO: either X or Y is fine here as both just have to be 0 for this to work.
-                    //       take advantage of that and use the one that's most convenient.
-                    const reg_x_save = try func.saveReg(.x);
-                    defer reg_x_save.restore();
-                    try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } });
                     switch (src_reg) {
-                        .a => try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr }),
-                        .x => unreachable, // TODO
-                        .y => unreachable, // TODO
-                    }
-                },
-                .abs_unres => |dst_unres| {
-                    switch (src_reg) {
-                        .a => try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres } }),
-                        .x => try func.addInst(.stx_abs, .{ .abs = .{ .unres = dst_unres } }),
-                        .y => try func.addInst(.sty_abs, .{ .abs = .{ .unres = dst_unres } }),
-                    }
-                },
-            }
-        },
-        .zp => |src_addr| {
-            switch (dst) {
-                .none => unreachable,
-                .imm => unreachable,
-                .reg => |dst_reg| {
-                    assert(size == 1);
-                    switch (dst_reg) {
-                        .a => try func.addInst(.lda_zp, .{ .zp = src_addr }),
-                        .x => try func.addInst(.ldx_zp, .{ .zp = src_addr }),
-                        .y => try func.addInst(.ldy_zp, .{ .zp = src_addr }),
-                    }
-                },
-                .zp => |dst_addr| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.lda_zp, .{ .zp = src_addr + i });
-                        try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
-                    }
-                },
-                .abs => |dst_addr| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.lda_zp, .{ .zp = src_addr + i });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
-                    }
-                },
-                .zp_abs => |dst_addr| {
-                    assert(ty.zigTypeTag() == .Pointer);
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    try func.addInst(.lda_imm, .{ .imm = .{ .val = src_addr } });
-                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
-                    // Zero-extend the zero page address to be pointer-sized.
-                    try func.addInst(.lda_imm, .{ .imm = .{ .val = 0 } });
-                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
-                },
-                .abs_unres => |dst_unres| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.lda_zp, .{ .zp = src_addr + i });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
-                    }
-                },
-            }
-        },
-        .abs => |src_addr| {
-            switch (dst) {
-                .none => unreachable,
-                .imm => unreachable,
-                .reg => |dst_reg| {
-                    assert(size == 1);
-                    switch (dst_reg) {
-                        .a => try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr } }),
-                        .x => try func.addInst(.ldx_abs, .{ .abs = .{ .fixed = src_addr } }),
-                        .y => try func.addInst(.ldy_abs, .{ .abs = .{ .fixed = src_addr } }),
-                    }
-                },
-                .zp => |dst_addr| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
-                        try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
-                    }
-                },
-                .abs => |dst_addr| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u16 = 0;
-                    while (i < size) : (i += 1) {
-                        try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
-                    }
-                },
-                .zp_abs => |dst_addr| {
-                    assert(ty.zigTypeTag() == .Pointer);
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    const addr_halves = @bitCast([2]u8, src_addr);
-                    // Low byte first.
-                    try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[0] } });
-                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
-                    // High byte second.
-                    try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[1] } });
-                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
-                },
-                .abs_unres => |dst_unres| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u16 = 0;
-                    while (i < size) : (i += 1) {
-                        try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
-                    }
-                },
-            }
-        },
-        .zp_abs => |src_addr| {
-            switch (dst) {
-                .none => unreachable,
-                .imm => unreachable,
-                .reg => |dst_reg| {
-                    assert(size == 1);
-                    // TODO: either X or Y is fine here as both just have to be 0 for this to work.
-                    //       take advantage of that and use the one that's most convenient.
-                    const reg_y_save = try func.saveReg(.y);
-                    defer reg_y_save.restore();
-                    try func.addInst(.ldy_imm, .{ .imm = .{ .val = 0 } });
-                    switch (dst_reg) {
-                        .a => try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr }),
-                        .x => unreachable, // TODO: try func.addInst(.ldx_ind_y_zp, .{ .zp = src_addr }),
-                        .y => unreachable, // TODO: try func.addInst(.ldy_ind_y_zp, .{ .zp = src_addr }),
-                    }
-                },
-                .zp => |dst_addr| {
-                    const reg_a_save = try func.saveReg(.a);
-                    defer reg_a_save.restore();
-                    const reg_y_save = try func.saveReg(.y);
-                    defer reg_y_save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
-                        try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
-                        try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
-                    }
-                },
-                .abs => |dst_addr| {
-                    const reg_a_save = try func.saveReg(.a);
-                    defer reg_a_save.restore();
-                    const reg_y_save = try func.saveReg(.y);
-                    defer reg_y_save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
-                        try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
-                    }
-                },
-                .zp_abs => |dst_addr| {
-                    assert(ty.zigTypeTag() == .Pointer);
-                    const reg_a_save = try func.saveReg(.a);
-                    defer reg_a_save.restore();
-                    try func.addInst(.lda_zp, .{ .zp = src_addr + 0 });
-                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
-                    try func.addInst(.lda_zp, .{ .zp = src_addr + 1 });
-                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
-                },
-                .abs_unres => |dst_unres| {
-                    const reg_a_save = try func.saveReg(.a);
-                    defer reg_a_save.restore();
-                    const reg_y_save = try func.saveReg(.y);
-                    defer reg_y_save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
-                        try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
-                    }
-                },
-            }
-        },
-        .abs_unres => |src_unres| {
-            switch (dst) {
-                .none => unreachable,
-                .imm => unreachable,
-                .reg => |dst_reg| {
-                    assert(size == 1);
-                    switch (dst_reg) {
-                        .a => try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres } }),
-                        .x => try func.addInst(.ldx_abs, .{ .abs = .{ .unres = src_unres } }),
-                        .y => try func.addInst(.ldy_abs, .{ .abs = .{ .unres = src_unres } }),
-                    }
-                },
-                .zp => |dst_addr| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
-                        try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
-                        try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
-                    }
-                },
-                .abs => |dst_addr| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u16 = 0;
-                    while (i < size) : (i += 1) {
-                        try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
-                    }
-                },
-                .zp_abs => |dst_addr| {
-                    switch (ty.zigTypeTag()) {
-                        .Pointer => {
-                            const save = try func.saveReg(.a);
-                            defer save.restore();
-                            try func.addInst(.lda_imm, .{ .imm = .{ .unres_addr_half = src_unres.takeHalf(.low) } });
-                            try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
-                            try func.addInst(.lda_imm, .{ .imm = .{ .unres_addr_half = src_unres.takeHalf(.high) } });
-                            try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
+                        .a => {
+                            // TODO: either X or Y is fine here as either just has to be 0 for this to work.
+                            //       take advantage of that and use the one that's most convenient.
+                            const reg_x_save = try func.saveReg(.x);
+                            defer reg_x_save.restore();
+                            try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } });
+                            try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr });
                         },
-                        else => {
+                        .x => {
                             const reg_a_save = try func.saveReg(.a);
                             defer reg_a_save.restore();
-                            const reg_y_save = try func.saveReg(.y);
-                            defer reg_y_save.restore();
-                            // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                            var i: u8 = 0;
-                            while (i < @intCast(u8, size)) : (i += 1) {
-                                try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
-                                try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
-                                try func.addInst(.sta_ind_y_zp, .{ .zp = dst_addr });
-                            }
+                            const reg_x_save = try func.saveReg(.x);
+                            defer reg_x_save.restore();
+                            try func.addInst(.txa_impl, .{ .zp = dst_addr });
+                            try func.addInst(.ldy_imm, .{ .imm = .{ .val = 0 } });
+                            try func.addInst(.sta_ind_y_zp, .{ .zp = dst_addr });
+                        },
+                        .y => {
+                            const reg_a_save = try func.saveReg(.a);
+                            defer reg_a_save.restore();
+                            const reg_x_save = try func.saveReg(.x);
+                            defer reg_x_save.restore();
+                            try func.addInst(.tya_impl, .{ .zp = dst_addr });
+                            try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } });
+                            try func.addInst(.sta_x_ind_zp, .{ .zp = dst_addr });
                         },
                     }
                 },
-                .abs_unres => |dst_unres| {
-                    const save = try func.saveReg(.a);
-                    defer save.restore();
-                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
-                    var i: u16 = 0;
-                    while (i < size) : (i += 1) {
-                        try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
-                        try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
-                    }
+                .abs_unres => |dst_unres| switch (src_reg) {
+                    .a => try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres } }),
+                    .x => try func.addInst(.stx_abs, .{ .abs = .{ .unres = dst_unres } }),
+                    .y => try func.addInst(.sty_abs, .{ .abs = .{ .unres = dst_unres } }),
                 },
             }
+        },
+        .zp => |src_addr| switch (dst) {
+            .none => unreachable,
+            .imm => unreachable,
+            .reg => |dst_reg| {
+                assert(size == 1);
+                switch (dst_reg) {
+                    .a => try func.addInst(.lda_zp, .{ .zp = src_addr }),
+                    .x => try func.addInst(.ldx_zp, .{ .zp = src_addr }),
+                    .y => try func.addInst(.ldy_zp, .{ .zp = src_addr }),
+                }
+            },
+            .zp => |dst_addr| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.lda_zp, .{ .zp = src_addr + i });
+                    try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
+                }
+            },
+            .abs => |dst_addr| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.lda_zp, .{ .zp = src_addr + i });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
+                }
+            },
+            .zp_abs => |dst_addr| {
+                assert(ty.zigTypeTag() == .Pointer);
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                try func.addInst(.lda_imm, .{ .imm = .{ .val = src_addr } });
+                try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
+                // Zero-extend the zero page address to be pointer-sized.
+                try func.addInst(.lda_imm, .{ .imm = .{ .val = 0 } });
+                try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
+            },
+            .abs_unres => |dst_unres| {
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.lda_zp, .{ .zp = src_addr + i });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
+                }
+            },
+        },
+        .abs => |src_addr| switch (dst) {
+            .none => unreachable,
+            .imm => unreachable,
+            .reg => |dst_reg| {
+                assert(size == 1);
+                switch (dst_reg) {
+                    .a => try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr } }),
+                    .x => try func.addInst(.ldx_abs, .{ .abs = .{ .fixed = src_addr } }),
+                    .y => try func.addInst(.ldy_abs, .{ .abs = .{ .fixed = src_addr } }),
+                }
+            },
+            .zp => |dst_addr| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
+                    try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
+                }
+            },
+            .abs => |dst_addr| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u16 = 0;
+                while (i < size) : (i += 1) {
+                    try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
+                }
+            },
+            .zp_abs => |dst_addr| {
+                assert(ty.zigTypeTag() == .Pointer);
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                const addr_halves = @bitCast([2]u8, src_addr);
+                // Low byte first.
+                try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[0] } });
+                try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
+                // High byte second.
+                try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[1] } });
+                try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
+            },
+            .abs_unres => |dst_unres| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u16 = 0;
+                while (i < size) : (i += 1) {
+                    try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
+                }
+            },
+        },
+        .zp_abs => |src_addr| switch (dst) {
+            .none => unreachable,
+            .imm => unreachable,
+            .reg => |dst_reg| {
+                assert(size == 1);
+                switch (dst_reg) {
+                    .a => {
+                        // TODO: either X or Y is fine here as either just has to be 0 for this to work.
+                        //       take advantage of that and use the one that's most convenient.
+                        const reg_y_save = try func.saveReg(.y);
+                        defer reg_y_save.restore();
+                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = 0 } });
+                        try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
+                    },
+                    .x => {
+                        const reg_a_save = try func.saveReg(.a);
+                        defer reg_a_save.restore();
+                        try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } });
+                        try func.addInst(.lda_x_ind_zp, .{ .zp = src_addr });
+                        try func.addInst(.tax_impl, .{ .none = {} });
+                    },
+                    .y => {
+                        const reg_a_save = try func.saveReg(.a);
+                        defer reg_a_save.restore();
+                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = 0 } });
+                        try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
+                        try func.addInst(.tay_impl, .{ .none = {} });
+                    },
+                }
+            },
+            .zp => |dst_addr| {
+                const reg_a_save = try func.saveReg(.a);
+                defer reg_a_save.restore();
+                const reg_y_save = try func.saveReg(.y);
+                defer reg_y_save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
+                    try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
+                    try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
+                }
+            },
+            .abs => |dst_addr| {
+                const reg_a_save = try func.saveReg(.a);
+                defer reg_a_save.restore();
+                const reg_y_save = try func.saveReg(.y);
+                defer reg_y_save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
+                    try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
+                }
+            },
+            .zp_abs => |dst_addr| {
+                assert(ty.zigTypeTag() == .Pointer);
+                const reg_a_save = try func.saveReg(.a);
+                defer reg_a_save.restore();
+                try func.addInst(.lda_zp, .{ .zp = src_addr + 0 });
+                try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
+                try func.addInst(.lda_zp, .{ .zp = src_addr + 1 });
+                try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
+            },
+            .abs_unres => |dst_unres| {
+                const reg_a_save = try func.saveReg(.a);
+                defer reg_a_save.restore();
+                const reg_y_save = try func.saveReg(.y);
+                defer reg_y_save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
+                    try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
+                }
+            },
+        },
+        .abs_unres => |src_unres| switch (dst) {
+            .none => unreachable,
+            .imm => unreachable,
+            .reg => |dst_reg| {
+                assert(size == 1);
+                switch (dst_reg) {
+                    .a => try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres } }),
+                    .x => try func.addInst(.ldx_abs, .{ .abs = .{ .unres = src_unres } }),
+                    .y => try func.addInst(.ldy_abs, .{ .abs = .{ .unres = src_unres } }),
+                }
+            },
+            .zp => |dst_addr| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u8 = 0;
+                while (i < @intCast(u8, size)) : (i += 1) {
+                    try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
+                    try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
+                }
+            },
+            .abs => |dst_addr| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u16 = 0;
+                while (i < size) : (i += 1) {
+                    try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
+                }
+            },
+            .zp_abs => |dst_addr| switch (ty.zigTypeTag()) {
+                .Pointer => {
+                    const save = try func.saveReg(.a);
+                    defer save.restore();
+                    try func.addInst(.lda_imm, .{ .imm = .{ .unres_addr_half = src_unres.takeHalf(.low) } });
+                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
+                    try func.addInst(.lda_imm, .{ .imm = .{ .unres_addr_half = src_unres.takeHalf(.high) } });
+                    try func.addInst(.sta_zp, .{ .zp = dst_addr + 1 });
+                },
+                else => {
+                    const reg_a_save = try func.saveReg(.a);
+                    defer reg_a_save.restore();
+                    const reg_y_save = try func.saveReg(.y);
+                    defer reg_y_save.restore();
+                    // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                    var i: u8 = 0;
+                    while (i < @intCast(u8, size)) : (i += 1) {
+                        try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
+                        try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
+                        try func.addInst(.sta_ind_y_zp, .{ .zp = dst_addr });
+                    }
+                },
+            },
+            .abs_unres => |dst_unres| {
+                const save = try func.saveReg(.a);
+                defer save.restore();
+                // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
+                var i: u16 = 0;
+                while (i < size) : (i += 1) {
+                    try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
+                    try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
+                }
+            },
         },
     }
 }
@@ -1355,6 +1529,8 @@ fn processDeath(func: *Func, op: Air.Inst.Index, res: MV) void {
     func.getCurrentBranch().inst_vals.putAssumeCapacity(op, .none);
     log.debug("%{} = {}", .{ op, MV{ .none = {} } });
 
+    // TODO: investigate https://github.com/ziglang/zig/pull/14675/commits/994c9d673f9e48acb204eb7098817d1886b07349
+    //       and see how it can help us free memory correctly.
     switch (dead) {
         .none => unreachable,
         .imm => unreachable,
@@ -1642,7 +1818,6 @@ fn getLength(func: *Func) u16 {
             .tag = func.mir_instructions.items(.tag)[i],
             .data = func.mir_instructions.items(.data)[i],
         };
-        log.debug("inst: {}", .{inst});
         size += inst.getSize();
     }
     return size;
@@ -1652,6 +1827,10 @@ fn getLength(func: *Func) u16 {
 // Codegen fail handling
 //
 
+// TODO(meeting): the remote 6502 branch is currently broken because the type of this has to be
+//                error{ OutOfMemory, CodegenFail }
+//                change the return type back to `!error{CodegenFail}` and do `try func.fail` again if that will be possible again:
+//                https://github.com/ziglang/zig/issues/7913#issuecomment-1435655769
 fn fail(func: *Func, comptime fmt: []const u8, args: anytype) !error{CodegenFail} {
     @setCold(true);
     func.err_msg = try Module.ErrorMsg.create(func.getAllocator(), func.src_loc, fmt, args);
@@ -1667,37 +1846,7 @@ fn failAddNote(func: *Func, comptime fmt: []const u8, args: anytype) !void {
 // Binary operations
 //
 
-// TODO: move these two into a different section eventually ("Memory interaction"?) if we keep these
-// TODO: instead of these two, make a readable helper for transfering specific bytes designated by an index from src to dst?
-//       maybe an optional `index` param to `trans`? a new transByte? MV.index?
-//       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
-// TODO: loadReg, storeReg?
-/// Loads into the A register a byte of the given value designated by the index.
-fn loadA(func: *Func, val: MV, index: u16) !void {
-    switch (val) {
-        .none => unreachable,
-        .imm => unreachable, // TODO
-        .reg => unreachable, // TODO
-        .zp => |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, index) }),
-        .abs => |addr| try func.addInst(.lda_abs, .{ .abs = .{ .fixed = addr + index } }),
-        .zp_abs => unreachable, // TODO: (lda_x_ind_zp) |addr| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, i) }),
-        .abs_unres => |abs_unres| try func.addInst(.lda_abs, .{ .abs = .{ .unres = abs_unres.index(index) } }),
-    }
-}
-/// Stores the A register's value to a byte of the given value designated by the index.
-fn storeA(func: *Func, val: MV, index: u16) !void {
-    switch (val) {
-        .none => unreachable,
-        .imm => unreachable,
-        .reg => unreachable,
-        .zp => |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, index) }),
-        .abs => |addr| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + index } }),
-        .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
-        .abs_unres => |abs_unres| try func.addInst(.sta_abs, .{ .abs = .{ .unres = abs_unres.index(index) } }),
-    }
-}
-
-fn intBinOp(
+fn intAddOrSub(
     func: *Func,
     op: Air.Inst.Tag,
     lhs: MV,
@@ -1709,14 +1858,7 @@ fn intBinOp(
     maybe_desired_dst: ?MV,
 ) !MV {
     assert(ty.zigTypeTag() == .Int);
-
     const size = func.getSize(ty).?;
-
-    // TODO: use DEC, DEX, DEY, INC, INX, INY. will be useful especially for loops.
-    // Make sure binary-coded decimal mode is off.
-    try func.clearFlag(.decimal);
-    // TODO: implement https://www.nesdev.org/wiki/6502_assembly_optimisations#Avoiding_the_need_for_CLC/SEC_with_ADC/SBC
-    //       for ADC and SBC
     const res = switch (op) {
         // This assembly shows the addition of two words:
         // ```
@@ -1742,11 +1884,48 @@ fn intBinOp(
         //     rts
         // ```
         .add, .addwrap, .add_sat => res: {
-            try func.clearFlag(.carry);
-            defer func.resetFlag(.carry);
-
             var maybe_dst: ?MV = maybe_desired_dst;
             var maybe_reg_a: ?MV = null;
+
+            // If we're adding a one, we can use special instructions INC, INX, and INY to increment by one.
+            // These instructions don't set carry so we can only use it for bytes.
+            // Because they don't set V or C we can't check for overflow so we can't use them for saturating arithmetic either.
+            // TODO: codegen currently never really sees the opportunity to go this code path because the operand is usually in A
+            inc: {
+                if (size == 1 and op != .add_sat and maybe_dst == null) {
+                    const incrementee = if (lhs == .imm and lhs.imm == 1)
+                        rhs
+                    else if (rhs == .imm and rhs.imm == 1)
+                        lhs
+                    else
+                        break :inc;
+                    switch (incrementee) {
+                        .none => break :inc,
+                        .imm => break :inc,
+                        .reg => |reg| switch (reg) {
+                            .a => break :inc,
+                            .x => {
+                                _ = func.takeReg(.x, owner);
+                                try func.addInst(.inx_impl, .{ .none = {} });
+                            },
+                            .y => {
+                                _ = func.takeReg(.y, owner);
+                                try func.addInst(.iny_impl, .{ .none = {} });
+                            },
+                        },
+                        .zp => |addr| try func.addInst(.inc_zp, .{ .zp = addr }),
+                        .abs => |addr| try func.addInst(.inc_zp, .{ .abs = .{ .fixed = addr } }),
+                        .zp_abs => unreachable, // TODO
+                        .abs_unres => |unres| try func.addInst(.inc_zp, .{ .abs = .{ .unres = unres } }),
+                    }
+                    return incrementee;
+                }
+            }
+
+            // Turn off binary-coded decimal mode. This only affects ADC and SBC.
+            try func.reg_mem.decimal_flag.clear();
+            try func.reg_mem.carry_flag.clear();
+            defer func.reg_mem.carry_flag.reset();
 
             // TODO: do this inlined loop at runtime at a certain threshold depending on optimize mode
             var i: u16 = 0;
@@ -1764,15 +1943,14 @@ fn intBinOp(
                         maybe_reg_a = func.takeReg(.a, null);
                         break :other lhs;
                     } else {
-                        // Neither LHS nor RHS were already in the accumulator,
-                        // so get either of them in the accumulator.
+                        // Get either of LHS or RHS in the accumulator.
                         maybe_reg_a = try func.freeReg(.a, null);
-                        try func.loadA(lhs, i);
+                        try func.loadA(lhs, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
                         break :other rhs;
                     }
                 };
                 // Either LHS or RHS is now in the accumulator.
-                // Now add the other operand.
+                // Now add the other operand to the first with a possible carry.
                 switch (other) {
                     .none => unreachable,
                     .imm => |imm| {
@@ -1783,31 +1961,73 @@ fn intBinOp(
                     .zp => unreachable, // TODO
                     .abs => |addr| try func.addInst(.adc_abs, .{ .abs = .{ .fixed = addr + i } }),
                     .zp_abs => unreachable, // TODO
-                    // TODO: make the convention to use "unres" instead of "abs_unres" as the capture name?
-                    .abs_unres => |abs_unres| try func.addInst(.adc_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                    .abs_unres => |unres| try func.addInst(.adc_abs, .{ .abs = .{ .unres = unres.index(i) } }),
                 }
 
-                if (size == 1) {
+                if (maybe_desired_dst == null and size == 1) {
                     // Now we can safely take ownership.
                     _ = func.takeReg(.a, owner);
-                    return maybe_reg_a.?;
+                    break :res maybe_reg_a.?;
                 }
 
                 if (maybe_dst == null)
                     maybe_dst = try func.allocAddrMem(ty);
                 const dst = maybe_dst.?;
-                try func.storeA(dst, i);
+                try func.storeA(dst, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
+            }
+            if (op == .add_sat) {
+                // NOTE: this is best implemented after implementing some basic branching stuff.
+                //       use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
+                //       to detect overflow to implement this.
+                return try func.fail("TODO: implement add/sub saturation", .{});
             }
             break :res maybe_dst.?;
         },
         .sub, .subwrap, .sub_sat => res: {
-            // For subtraction we have to do the opposite of what we do for addition:
-            // we *set carry*, which for subtraction means we *clear borrow*.
-            try func.setFlag(.carry);
-            defer func.resetFlag(.carry);
-
             var maybe_dst: ?MV = maybe_desired_dst;
             var maybe_reg_a: ?MV = null;
+
+            // If we're subtracting a one, we can use special instructions DEC, DEX, and DEY to decrement by one.
+            // These instructions don't set borrow so we can only use it for bytes.
+            // Because they don't set V or C we can't check for overflow so we can't use them for saturating arithmetic either.
+            // TODO: codegen currently never really sees the opportunity to go this code path because the operand is usually in A
+            dec: {
+                if (size == 1 and op != .add_sat and maybe_dst == null) {
+                    const decrementee = if (lhs == .imm and lhs.imm == 1)
+                        rhs
+                    else if (rhs == .imm and rhs.imm == 1)
+                        lhs
+                    else
+                        break :dec;
+                    switch (decrementee) {
+                        .none => break :dec,
+                        .imm => break :dec,
+                        .reg => |reg| switch (reg) {
+                            .a => break :dec,
+                            .x => {
+                                _ = func.takeReg(.x, owner);
+                                try func.addInst(.dex_impl, .{ .none = {} });
+                            },
+                            .y => {
+                                _ = func.takeReg(.y, owner);
+                                try func.addInst(.dey_impl, .{ .none = {} });
+                            },
+                        },
+                        .zp => |addr| try func.addInst(.dec_zp, .{ .zp = addr }),
+                        .abs => |addr| try func.addInst(.dec_zp, .{ .abs = .{ .fixed = addr } }),
+                        .zp_abs => unreachable, // TODO
+                        .abs_unres => |unres| try func.addInst(.dec_zp, .{ .abs = .{ .unres = unres } }),
+                    }
+                    return decrementee;
+                }
+            }
+
+            // Turn off binary-coded decimal mode. This only affects ADC and SBC.
+            try func.reg_mem.decimal_flag.clear();
+            // For subtraction we have to do the opposite of what we do for addition:
+            // we *set carry*, which for subtraction means we *clear borrow*.
+            try func.reg_mem.decimal_flag.set();
+            defer func.reg_mem.carry_flag.reset();
 
             var i: u16 = 0;
             while (i < size) : (i += 1) {
@@ -1823,9 +2043,10 @@ fn intBinOp(
                         .a,
                         null, // We won't take ownership of the register yet in case the result won't go in the register.
                     );
-                    try func.loadA(lhs, i);
+                    try func.loadA(lhs, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
                 }
 
+                // Now subtract LHS from LHS with a possible borrow.
                 switch (rhs) {
                     .none => unreachable,
                     .imm => |imm| {
@@ -1836,47 +2057,33 @@ fn intBinOp(
                     .zp => unreachable, // TODO
                     .abs => unreachable, // TODO
                     .zp_abs => unreachable, // TODO
-                    .abs_unres => |abs_unres| try func.addInst(.sbc_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
+                    .abs_unres => |unres| try func.addInst(.sbc_abs, .{ .abs = .{ .unres = unres.index(i) } }),
                 }
 
-                if (size == 1) {
+                if (maybe_desired_dst == null and size == 1) {
                     _ = func.takeReg(.a, owner);
-                    return maybe_reg_a.?;
+                    break :res maybe_reg_a.?;
                 }
 
                 if (maybe_dst == null)
                     maybe_dst = try func.allocAddrMem(ty);
                 const dst = maybe_dst.?;
-
-                // TODO: make a readable helper for this? maybe an optional `index` param to `trans`? a new transByte? MV.index?
-                //       factor in zp_abs. maybe ByteLoad: a bunch of instructions that are added lazily. (similar to saveReg and RegSave.restore)
-                switch (dst) {
-                    .none => unreachable,
-                    .imm => unreachable,
-                    .reg => unreachable,
-                    .zp => |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
-                    .abs => |addr| try func.addInst(.sta_abs, .{ .abs = .{ .fixed = addr + i } }),
-                    .zp_abs => unreachable, // TODO: (sta_x_ind_zp) |addr| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, i) }),
-                    .abs_unres => |abs_unres| try func.addInst(.sta_abs, .{ .abs = .{ .unres = abs_unres.index(i) } }),
-                }
+                try func.storeA(dst, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
+            }
+            if (op == .sub_sat) {
+                // NOTE: this is best implemented after implementing some basic branching stuff.
+                //       use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
+                //       to detect overflow to implement this.
+                return try func.fail("TODO: implement add/sub saturation", .{});
             }
             break :res maybe_dst.?;
         },
         else => unreachable,
     };
-    switch (op) {
-        .add_sat, .sub_sat => {
-            // NOTE: this is best implemented after implementing some basic branching stuff.
-            //       use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
-            //       to detect overflow to implement this.
-            return try func.fail("TODO: implement add/sub saturation", .{});
-        },
-        else => {},
-    }
     return res;
 }
 
-fn ptrBinOp(
+fn ptrArithmetic(
     func: *Func,
     op: Air.Inst.Tag,
     ptr: MV,
@@ -1912,7 +2119,7 @@ fn ptrBinOp(
     // Reinterpret zp_abs as zp so that it ends up reading the address itself at this
     // zero page address rather than dereferencing it.
     const addr = .{ .zp = rt_ptr.zp_abs };
-    const new_ptr = try func.intBinOp(int_op, addr, off, off_ty, owner, addr);
+    const new_ptr = try func.intAddOrSub(int_op, addr, off, off_ty, owner, addr);
     assert(new_ptr.eql(addr));
     // Now make it into a zp_abs again (i.e. a runtime pointer).
     const res = .{ .zp_abs = new_ptr.zp };
@@ -1924,6 +2131,13 @@ fn elemOffset(func: *Func, index: MV, index_ty: Type, elem_size: u16) !MV {
     if (elem_size == 1)
         return index;
     _ = index_ty;
+
+    // TODO: test this program:
+    // ```
+    // const arr: [1024]u8 = undefined;
+    // var x = arr[500];
+    // _ = x;
+    // ```
 
     switch (index) {
         .imm => |imm| {
@@ -1939,11 +2153,196 @@ fn elemOffset(func: *Func, index: MV, index_ty: Type, elem_size: u16) !MV {
     }
 }
 
+fn bitwise(
+    func: *Func,
+    op: Air.Inst.Tag,
+    lhs: MV,
+    rhs: MV,
+    ty: Type,
+    /// The owner of the result.
+    owner: Air.Inst.Index,
+    /// The result destination.
+    maybe_desired_dst: ?MV,
+) !MV {
+    assert(ty.zigTypeTag() == .Int);
+    const size = func.getSize(ty).?;
+    // These instructions all support the exact same addressing modes.
+    const mir_inst_prefix = switch (op) {
+        .bit_and => "and",
+        .bit_or => "ora",
+        .xor => "eor",
+        else => unreachable,
+    };
+
+    // TODO(meeting): status quo is that if the max loop count doesn't fit in MV.imm, we don't inline, which also regulates code size bloat for a good balance.
+    //                if we decide to inline at any size someday, we can make MV.imm a u16 and decide based on type how to lower it. that could make u16/usize code faster as a side effect.
+    //                in practice, this means only types bigger than u2048 will no longer be inlined, even in ReleaseSmall.
+    //                I think that is a decent threshold even long-term.
+    const loop_type: enum { runtime, inlined } = switch (func.getOptimizeMode()) {
+        .fast => if (size >= 0xFF) .runtime else .inlined,
+        .small => if (size > 2) .runtime else .inlined,
+    };
+
+    log.debug("loop_type: {}", .{loop_type});
+
+    var maybe_dst: ?MV = maybe_desired_dst;
+    var maybe_reg_a: ?MV = null;
+
+    // TODO: create an abstraction such as a constLoop that takes a function and a Context to abstract this (or split it into multiple functions)
+    //       so that we can inline or not inline any loop anywhere
+    var i: u16 = 0;
+    while (true) {
+        const index: MV = switch (loop_type) {
+            .inlined => .{ .imm = @intCast(u8, i) },
+            .runtime => index: {
+                if (size <= 0xFF) {
+                    const index = if (func.isRegFree(.x))
+                        func.takeReg(.x, null)
+                    else if (func.isRegFree(.y))
+                        func.takeReg(.y, null)
+                    else
+                        try func.freeReg(.x, null);
+                    switch (index.reg) {
+                        .x => try func.addInst(.ldx_imm, .{ .imm = .{ .val = 0 } }),
+                        .y => try func.addInst(.ldy_imm, .{ .imm = .{ .val = 0 } }),
+                        else => unreachable,
+                    }
+                    break :index index;
+                } else {
+                    const reg_a = try func.saveReg(.a);
+                    defer reg_a.restore();
+                    const index = try func.allocAddrMem(Type.u16);
+                    try func.addInst(.lda_imm, .{ .imm = .{ .val = 0 } });
+                    try func.storeA(index, .{ .imm = 0 });
+                    try func.storeA(index, .{ .imm = 1 });
+                    break :index index;
+                }
+            },
+        };
+
+        log.debug("i: {d}, loc: {}", .{ i, index });
+
+        const before = func.getLength();
+
+        if (index == .reg) {
+            // In case the index register is used in the loop, we assign a dummy owner
+            // that will simply serve as a marker for that the register is in use.
+            const dummy_owner: Air.Inst.Index = 0;
+            _ = func.takeReg(index.reg, dummy_owner);
+        }
+        // TODO: take advantage of commutativeness. all these 3 bitwise ops are commutative. see addition implementation.
+        {
+            // In both cases we won't take ownership of the register yet in case the result won't go in the register.
+            if (lhs == .reg and lhs.reg == .a) {
+                // LHS is already in the accumulator so mark it as free.
+                maybe_reg_a = func.takeReg(.a, null);
+            } else {
+                maybe_reg_a = try func.freeReg(.a, null);
+                // TODO: support index > $FF in addr mem (can't store that in A)
+                try func.loadA(lhs, index);
+            }
+
+            // TODO: once we hit possible 100 instructions in Mir.Inst.Tag, stringToEnum will stop working
+            //       if that happens, maybe create a second Tag as a workaround and then convert from that to Mir.Inst.Tag
+            const stringToEnum = std.meta.stringToEnum;
+            switch (rhs) {
+                .none => unreachable,
+                .imm => |imm| {
+                    assert(size == 1);
+                    try func.addInst(stringToEnum(Mir.Inst.Tag, mir_inst_prefix ++ "_imm").?, .{ .imm = .{ .val = imm } });
+                },
+                .reg => unreachable, // TODO
+                .zp => unreachable, // TODO
+                .abs => unreachable, // TODO
+                .zp_abs => unreachable, // TODO
+                .abs_unres => |unres| switch (index) {
+                    .none => unreachable,
+                    .imm => |imm| {
+                        try func.addInst(.ldx_imm, .{ .imm = .{ .val = imm } });
+                        try func.addInst(stringToEnum(Mir.Inst.Tag, mir_inst_prefix ++ "_x_abs").?, .{ .abs = .{ .unres = unres } });
+                    },
+                    .reg => |reg| switch (reg) {
+                        .a => unreachable,
+                        .x => try func.addInst(stringToEnum(Mir.Inst.Tag, mir_inst_prefix ++ "_x_abs").?, .{ .abs = .{ .unres = unres } }),
+                        .y => try func.addInst(stringToEnum(Mir.Inst.Tag, mir_inst_prefix ++ "_y_abs").?, .{ .abs = .{ .unres = unres } }),
+                    },
+                    else => unreachable,
+                },
+            }
+
+            if (maybe_desired_dst == null and size == 1) {
+                // Now we can safely take ownership.
+                _ = func.takeReg(.a, owner);
+                return maybe_reg_a.?;
+            }
+
+            if (maybe_dst == null)
+                maybe_dst = try func.allocAddrMem(ty);
+            const dst = maybe_dst.?;
+            // TODO: support index > $FF in addr mem (it wouldn't be in A)
+            try func.storeA(
+                switch (dst) {
+                    .none => unreachable,
+                    .imm => unreachable,
+                    .reg => unreachable,
+                    .zp => |addr| .{ .zp = addr + @intCast(u8, i) },
+                    .abs => |addr| .{ .abs = addr + i },
+                    .zp_abs => unreachable, // TODO
+                    .abs_unres => unreachable, // TODO
+                },
+                index,
+            );
+        }
+        if (index == .reg) {
+            _ = func.takeReg(index.reg, null);
+        }
+
+        const after = func.getLength();
+        const code_size = after - before;
+
+        // Increase the index.
+        switch (index) {
+            .none => unreachable,
+            .imm => i += 1,
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.inx_impl, .{ .none = {} }),
+                .y => try func.addInst(.iny_impl, .{ .none = {} }),
+            },
+            else => unreachable, // TODO: use INC for addr mem here
+        }
+        // Compare the index to the size to set the zero flag if equal.
+        switch (index) {
+            .none => unreachable,
+            .imm => if (i != size) continue,
+            .reg => |reg| switch (reg) {
+                .a => unreachable,
+                .x => try func.addInst(.cpx_imm, .{ .imm = .{ .val = @intCast(u8, size) } }),
+                .y => try func.addInst(.cpy_imm, .{ .imm = .{ .val = @intCast(u8, size) } }),
+            },
+            else => unreachable, // TODO: use CMP for addr mem here
+        }
+        // Then we will use BNE to branch back to the beginning if the zero flag is not set.
+        if (std.math.cast(i8, code_size)) |offset| {
+            const br_inst_size = 2;
+            try func.addInst(.bne_rel, .{ .rel = -offset - br_inst_size });
+        } else {
+            const err = try func.fail("TODO: support jumping back from code size > 128", .{});
+            try func.failAddNote("use .Debug, .ReleaseSafe, or .ReleaseFast for now or reduce your code size", .{});
+            return err;
+        }
+        break;
+    }
+    return maybe_dst.?;
+}
+
 //
 // AIR lowering
 //
 
 fn gen(func: *Func) !void {
+    try func.checkCompileOptions();
+
     const allocator = func.getAllocator();
     var call_vals = try func.resolveCallingConventionValues(func.getType());
     defer call_vals.deinit(allocator);
@@ -1963,50 +2362,55 @@ fn gen(func: *Func) !void {
 }
 
 fn genBody(func: *Func, body: []const Air.Inst.Index) !void {
-    for (body) |inst| {
+    for (body) |air_inst| {
         const old_air_bookkeeping = func.air_bookkeeping;
 
-        if (debug.runtime_safety)
-            func.air_current_inst = inst;
+        if (debug.runtime_safety) {
+            func.air_current_inst = air_inst;
+        }
 
         var i = @intCast(u16, func.mir_instructions.len);
-        try func.genInst(inst);
-        while (i < func.mir_instructions.len) : (i += 1) {
-            const mir_inst = Mir.Inst{
-                .tag = func.mir_instructions.items(.tag)[i],
-                .data = func.mir_instructions.items(.data)[i],
-            };
-            var buf: [20]u8 = undefined;
-            log.debug("-> {s: <20} (.{s})", .{ mir_inst.getTextRepr(&buf), @tagName(mir_inst.tag) });
+
+        try func.genInst(air_inst);
+
+        if (builtin.mode == .Debug) {
+            while (i < func.mir_instructions.len) : (i += 1) {
+                const mir_inst = Mir.Inst{
+                    .tag = func.mir_instructions.items(.tag)[i],
+                    .data = func.mir_instructions.items(.data)[i],
+                };
+                var buf: [20]u8 = undefined;
+                log.debug("-> {s: <20} (.{s})", .{ mir_inst.getTextRepr(&buf), @tagName(mir_inst.tag) });
+            }
+            log.debug("", .{});
         }
-        log.debug("", .{});
 
         if (debug.runtime_safety) {
             if (func.air_bookkeeping <= old_air_bookkeeping) {
                 debug.panic("missing `finishAir` call for AIR instruction `{}`", .{
-                    func.air.instructions.items(.tag)[inst],
+                    func.air.instructions.items(.tag)[air_inst],
                 });
             }
         }
     }
 }
 
-fn genInst(func: *Func, inst: Air.Inst.Index) !void {
+fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory }!void {
     try func.ensureProcessDeathCapacity(Liveness.bpi);
     const tag = func.air.instructions.items(.tag)[inst];
     log.debug("lowering {} (%{})...", .{ tag, inst });
     return switch (tag) {
         .arg => try func.airArg(inst),
-        .add => try func.airFloatOrIntBinOp(inst, .add),
+        .add => try func.airFloatOrIntAddOrSub(inst, .add),
         .add_optimized => try func.fail("TODO: implement add_optimized", .{}),
-        .addwrap => try func.airIntBinOp(inst, .addwrap),
+        .addwrap => try func.airIntAddOrSub(inst, .addwrap),
         .addwrap_optimized => try func.fail("TODO: implement addwrap_optimized", .{}),
-        .add_sat => try func.airIntBinOp(inst, .add_sat),
-        .sub => try func.airFloatOrIntBinOp(inst, .sub),
+        .add_sat => try func.airIntAddOrSub(inst, .add_sat),
+        .sub => try func.airFloatOrIntAddOrSub(inst, .sub),
         .sub_optimized => try func.fail("TODO: implement sub_optimized", .{}),
-        .subwrap => try func.airIntBinOp(inst, .subwrap),
+        .subwrap => try func.airIntAddOrSub(inst, .subwrap),
         .subwrap_optimized => try func.fail("TODO: implement subwrap_optimized", .{}),
-        .sub_sat => try func.airIntBinOp(inst, .sub_sat),
+        .sub_sat => try func.airIntAddOrSub(inst, .sub_sat),
         .mul => try func.fail("TODO: implement mul", .{}),
         .mul_optimized => try func.fail("TODO: implement mul_optimized", .{}),
         .mulwrap => try func.fail("TODO: implement mulwrap", .{}),
@@ -2024,8 +2428,8 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .rem_optimized => try func.fail("TODO: implement rem_optimized", .{}),
         .mod => try func.fail("TODO: implement mod", .{}),
         .mod_optimized => try func.fail("TODO: implement mod_optimized", .{}),
-        .ptr_add => try func.airPtrBinOp(inst, .ptr_add),
-        .ptr_sub => try func.airPtrBinOp(inst, .ptr_sub),
+        .ptr_add => try func.airPtrArithmetic(inst, .ptr_add),
+        .ptr_sub => try func.airPtrArithmetic(inst, .ptr_sub),
         // TODO: wait for https://github.com/ziglang/zig/issues/14039 to be implemented first
         //       before lowering the following two.
         .max => try func.fail("TODO: implement max", .{}),
@@ -2038,14 +2442,14 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .ret_ptr => try func.fail("TODO: implement ret_ptr", .{}),
         // TODO: this tag should be called .asm
         .assembly => try func.airAsm(inst),
-        .bit_and => try func.fail("TODO: implement bit_and", .{}),
-        .bit_or => try func.fail("TODO: implement bit_or", .{}),
+        .bit_and => try func.airBitwise(inst, .bit_and),
+        .bit_or => try func.airBitwise(inst, .bit_or),
         .shr => try func.fail("TODO: implement shr", .{}),
         .shr_exact => try func.fail("TODO: implement shr_exact", .{}),
         .shl => try func.fail("TODO: implement shl", .{}),
         .shl_exact => try func.fail("TODO: implement shl_exact", .{}),
         .shl_sat => try func.fail("TODO: implement shl_sat", .{}),
-        .xor => try func.fail("TODO: implement xor", .{}),
+        .xor => try func.airBitwise(inst, .xor),
         .not => try func.fail("TODO: implement not", .{}),
         // TODO: this tag should be called .bit_cast
         .bitcast => try func.airBitCast(inst),
@@ -2059,10 +2463,10 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .call_always_tail => try func.airCall(inst, .always_tail),
         .call_never_tail => try func.airCall(inst, .never_tail),
         .call_never_inline => try func.airCall(inst, .never_inline),
-        // TODO: can't we simply use compiler_rt for a lot of these?
-        //       on another note, am I supposed to use the
-        //       https://github.com/ziglang/zig/blob/master/lib/std/math/big/int.zig
-        //       stuff to implement integers with bit count > 128?
+        // TODO(meeting): can't we simply use compiler_rt for a lot of these?
+        //                on another note, am I supposed to use the
+        //                https://github.com/ziglang/zig/blob/master/lib/std/math/big/int.zig
+        //                stuff to implement integers with bit count > 128?
         .clz => try func.fail("TODO: implement clz", .{}),
         .ctz => try func.fail("TODO: implement ctz", .{}),
         // TODO: this tag should be called .pop_count
@@ -2123,6 +2527,8 @@ fn genInst(func: *Func, inst: Air.Inst.Index) !void {
         .is_non_err => try func.fail("TODO: implement is_non_err", .{}),
         .is_err_ptr => try func.fail("TODO: implement is_err_ptr", .{}),
         .is_non_err_ptr => try func.fail("TODO: implement is_non_err_ptr", .{}),
+        // TODO(meeting): why are the following two not generated on `x and y` and `x or y`
+        //                but instead those expressions become a block and a cond_br?
         .bool_and => try func.fail("TODO: implement bool_and", .{}),
         .bool_or => try func.fail("TODO: implement bool_or", .{}),
         .load => try func.airLoad(inst),
@@ -2250,7 +2656,7 @@ fn airArg(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, mv, &.{});
 }
 
-fn airFloatOrIntBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+fn airFloatOrIntAddOrSub(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
     const bin_op = func.air.instructions.items(.data)[inst].bin_op;
     if (func.liveness.isUnused(inst))
         return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
@@ -2262,13 +2668,13 @@ fn airFloatOrIntBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void
     const ty = lhs_ty;
     const res = switch (ty.zigTypeTag()) {
         .Float => return try func.fail("TODO: implement float binary operations", .{}),
-        .Int => try func.intBinOp(op, lhs, rhs, ty, inst, null),
+        .Int => try func.intAddOrSub(op, lhs, rhs, ty, inst, null),
         else => unreachable,
     };
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
-fn airIntBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+fn airIntAddOrSub(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
     const bin_op = func.air.instructions.items(.data)[inst].bin_op;
     if (func.liveness.isUnused(inst))
         return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
@@ -2278,11 +2684,11 @@ fn airIntBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
     const rhs_ty = func.air.typeOf(bin_op.rhs);
     assert(lhs_ty.eql(rhs_ty, func.getMod()));
     const ty = lhs_ty;
-    const res = try func.intBinOp(op, lhs, rhs, ty, inst, null);
+    const res = try func.intAddOrSub(op, lhs, rhs, ty, inst, null);
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
-fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+fn airPtrArithmetic(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
     const ty_pl = func.air.instructions.items(.data)[inst].ty_pl;
     const res_ty = func.air.getRefType(ty_pl.ty);
     const bin_op = func.air.extraData(Air.Bin, ty_pl.payload).data;
@@ -2293,7 +2699,7 @@ fn airPtrBinOp(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
     const ptr_ty = func.air.typeOf(bin_op.lhs);
     assert(res_ty.eql(ptr_ty, func.getMod()));
     const off_ty = func.air.typeOf(bin_op.rhs);
-    const res = try func.ptrBinOp(op, ptr, off, ptr_ty, off_ty, inst);
+    const res = try func.ptrArithmetic(op, ptr, off, ptr_ty, off_ty, inst);
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
@@ -2382,7 +2788,7 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
             if (func.getSize(input_ty).? != 1)
                 return try func.fail("unable to load non-8-bit-sized into {c} register", .{std.ascii.toUpper(reg_name[0])});
             if (!(input_val == .reg and input_val.reg == reg)) {
-                const reg_val = try func.freeReg(reg, inst);
+                const reg_val = try func.freeReg(reg, null);
                 // DEPRECATED: try func.setRegMem(input_ty, reg, input_val);
                 try func.trans(input_val, reg_val, input_ty);
             }
@@ -2397,6 +2803,7 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
         } else if (std.mem.eql(u8, asm_source, "nop")) {
             try func.addInst(.nop_impl, .{ .none = {} });
         } else {
+            // TODO: src/arch/6502/Asm.zig could be the place to implement a full-fledged assembler
             assert(asm_source.len == 0);
         }
 
@@ -2413,6 +2820,20 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
         big_tomb.feed(input, res);
     }
     return big_tomb.finishAir(res);
+}
+
+fn airBitwise(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
+    const bin_op = func.air.instructions.items(.data)[inst].bin_op;
+    if (func.liveness.isUnused(inst))
+        return func.finishAir(inst, .none, &.{ bin_op.lhs, bin_op.rhs });
+    const lhs = try func.resolveInst(bin_op.lhs);
+    const rhs = try func.resolveInst(bin_op.rhs);
+    const lhs_ty = func.air.typeOf(bin_op.lhs);
+    const rhs_ty = func.air.typeOf(bin_op.rhs);
+    assert(lhs_ty.eql(rhs_ty, func.getMod()));
+    const ty = lhs_ty;
+    const res = try func.bitwise(op, lhs, rhs, ty, inst, null);
+    func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
 fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
@@ -2546,6 +2967,10 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
         const src = try func.resolveInst(args[i]);
         const arg_ty = func.air.typeOf(args[i]);
         // DEPRECATED: try func.setAddrOrRegMem(arg_ty, dst, src);
+        switch (dst) {
+            .reg => |reg| _ = try func.freeReg(reg, null),
+            else => {},
+        }
         try func.trans(src, dst, arg_ty);
     }
 
@@ -2729,7 +3154,7 @@ fn airArrayElemVal(func: *Func, inst: Air.Inst.Index) !void {
         .size = .Many,
     });
     defer func.getAllocator().destroy(ptr_ty.ptr_otherwise);
-    const res_ptr = try func.ptrBinOp(.ptr_add, arr, off, ptr_ty, off_ty, inst);
+    const res_ptr = try func.ptrArithmetic(.ptr_add, arr, off, ptr_ty, off_ty, inst);
     const res = try func.allocAddrOrRegMem(elem_ty, inst);
     try func.trans(res_ptr, res, elem_ty);
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
@@ -2747,7 +3172,7 @@ fn airPtrElemVal(func: *Func, inst: Air.Inst.Index) !void {
     const index_ty = func.air.typeOf(bin_op.rhs);
     const off = try func.elemOffset(index, index_ty, elem_size);
     const off_ty = index_ty;
-    const res_ptr = try func.ptrBinOp(.ptr_add, ptr, off, ptr_ty, off_ty, inst);
+    const res_ptr = try func.ptrArithmetic(.ptr_add, ptr, off, ptr_ty, off_ty, inst);
     const res = try func.allocAddrOrRegMem(elem_ty, inst);
     try func.trans(res_ptr, res, elem_ty);
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
@@ -2769,6 +3194,6 @@ fn airPtrElemPtr(func: *Func, inst: Air.Inst.Index) !void {
     const index_ty = func.air.typeOf(extra.rhs);
     const off = try func.elemOffset(index, index_ty, elem_size);
     const off_ty = index_ty;
-    const res = try func.ptrBinOp(.ptr_add, ptr, off, ptr_ty, off_ty, inst);
+    const res = try func.ptrArithmetic(.ptr_add, ptr, off, ptr_ty, off_ty, inst);
     func.finishAir(inst, res, &.{ extra.lhs, extra.rhs });
 }

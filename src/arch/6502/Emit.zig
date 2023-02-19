@@ -109,6 +109,10 @@ fn emitAbsoluteAddress(emit: *Emit, abs_addr: Mir.Inst.Abs) !void {
             // resolve this absolute address in this function before we have the code of all
             // other functions, so we will let the linker fix this up later and emit
             // a placeholder for now.
+            // TODO(meeting): I have investigated the above statement's accuracy extensively in the past
+            //                but maybe someone else knows better - is it possible to resolve absolute memory addresses on the spot
+            //                in Func.zig? Can we come up with a design to allow that? one worry is that we don't know in which
+            //                order functions are generated. if confirmed that it is not possible, remove this TODO.
             const code_offset = emit.getCodeOffset();
             try emit.emitWord(undefined);
             if (emit.bin_file.cast(link.File.Prg)) |prg| {

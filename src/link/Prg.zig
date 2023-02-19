@@ -80,7 +80,7 @@ const Block = struct {
     /// which can be either a function as well as a symbol.
     index: u16,
     /// Whether this block is actually used in the final binary and should be included (to avoid bloat).
-    /// TODO: this works around something that the Zig compiler should be able to do; see:
+    /// TODO(meeting): this works around something that the Zig compiler should be able to do; see:
     /// * https://github.com/ziglang/zig/issues/6256
     /// * https://github.com/ziglang/zig/issues/13111
     /// * https://github.com/ziglang/zig/issues/14003
@@ -110,6 +110,8 @@ pub const UnresAddr = struct {
     half: ?u1,
 };
 
+// TODO: we also create an empty or partly complete binary file even if errors happened.
+//       only emit binaries if compilation succeeded.
 pub fn createEmpty(allocator: Allocator, options: link.Options) !*Prg {
     log.debug("createEmpty...", .{});
 
@@ -461,6 +463,12 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
         log.debug("writing block {} of address 0x{X:0>4}", .{ decl_index_and_block.block, addr });
         file_flush.appendBufAssumeCapacity(code);
         offset += @intCast(u16, code.len);
+    }
+
+    if (file_flush.file_size > std.math.maxInt(u16)) {
+        // TODO: this should not happen for -femit-asm
+        std.debug.print("binary file exceeded 64 KiB and will not be loadable into memory\n", .{});
+        return error.Overflow;
     }
 
     try file_flush.flush(file);

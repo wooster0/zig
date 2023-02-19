@@ -1,6 +1,6 @@
 #!/bin/sh
 
-file_name=hello
+file_name=bitwise
 
 stage3/bin/zig build-exe $file_name.zig \
     -ofmt=prg \

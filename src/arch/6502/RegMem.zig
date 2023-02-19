@@ -40,10 +40,10 @@ reg_y_owner: ?Air.Inst.Index = null,
 
 // Status register
 
-/// Whether binary-coded decimal mode is on.
-decimal: Flag(.sed_impl, .cld_impl, "decimal") = .{},
-/// Whether we have a carry bit.
-carry: Flag(.sec_impl, .clc_impl, "carry") = .{},
+/// State of the binary-coded decimal mode flag.
+decimal_flag: Flag(.sed_impl, .cld_impl, "decimal_flag") = .{},
+/// State of the carry flag.
+carry_flag: Flag(.sec_impl, .clc_impl, "carry_flag") = .{},
 
 fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comptime field_name: []const u8) type {
     return struct {
@@ -74,6 +74,9 @@ fn Flag(comptime set_inst: Mir.Inst.Tag, comptime clear_inst: Mir.Inst.Tag, comp
                     flag.state = .clear;
                 },
             }
+        }
+        pub fn reset(flag: *Self) void {
+            flag.state = .unknown;
         }
     };
 }
@@ -141,6 +144,17 @@ pub fn takeReg(
         .x => reg_mem.reg_x_owner = maybe_owner,
         .y => reg_mem.reg_y_owner = maybe_owner,
     }
+}
+
+pub fn getOwner(
+    reg_mem: RegMem,
+    reg: Reg,
+) ?Air.Inst.Index {
+    return switch (reg) {
+        .a => reg_mem.reg_a_owner,
+        .x => reg_mem.reg_x_owner,
+        .y => reg_mem.reg_y_owner,
+    };
 }
 
 /// Saves a register and makes it free for usage until it is restored.
@@ -227,6 +241,14 @@ pub fn alloc(reg_mem: *RegMem, owner: Air.Inst.Index) ?Reg {
         return .y;
     }
     return null;
+}
+
+pub fn isFree(reg_mem: RegMem, reg: Reg) bool {
+    return switch (reg) {
+        .a => reg_mem.reg_a_owner,
+        .x => reg_mem.reg_x_owner,
+        .y => reg_mem.reg_y_owner,
+    } == null;
 }
 
 pub fn checkInst(reg_mem: *RegMem, inst: Mir.Inst) void {
