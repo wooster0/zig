@@ -17,7 +17,6 @@ const Value = @import("../../value.zig").Value;
 const Air = @import("../../Air.zig");
 const Liveness = @import("../../Liveness.zig");
 const codegen = @import("../../codegen.zig");
-const GenerateSymbolError = codegen.GenerateSymbolError;
 const Result = codegen.Result;
 const DebugInfoOutput = codegen.DebugInfoOutput;
 const bits = @import("bits.zig");
@@ -88,7 +87,7 @@ pub fn isDeallocated(addr_mem: AddrMem, target: std.Target) bool {
     // Compare with the initial state.
     const init_zp_free = abi.getZeroPageAddresses(target);
     const init_abs_offset = abi.getAbsoluteMemoryOffset(target);
-    for (addr_mem.zp_free.constSlice()) |addr, i|
+    for (addr_mem.zp_free.constSlice(), 0..) |addr, i|
         if (addr != init_zp_free.constSlice()[i]) return false;
     if (addr_mem.abs_offset != init_abs_offset) return false;
     return true;
@@ -171,8 +170,8 @@ fn allocZeroPageMemory(addr_mem: *AddrMem, byte_count: u16) ?u8 {
     if (debug.runtime_safety) {
         if (!std.sort.isSorted(u8, addrs, {}, std.sort.asc(u8)))
             @panic("zero page addresses must be sorted low to high");
-        for (addrs) |addr1, addr1_i| {
-            for (addrs) |addr2, addr2_i| {
+        for (addrs, 0..) |addr1, addr1_i| {
+            for (addrs, 0..) |addr2, addr2_i| {
                 if (addr1_i != addr2_i and addr1 == addr2)
                     @panic("zero page addresses must not have duplicates");
             }
@@ -211,14 +210,14 @@ fn allocZeroPageMemory(addr_mem: *AddrMem, byte_count: u16) ?u8 {
     }
 
     // TODO: what's generally faster?
-    //       1. multiple `swapRemove`s and then one `std.sort.sort` at the end,
-    //       or 2. multiple `orderedRemove` and no `std.sort.sort`?
+    //       1. multiple `swapRemove`s and then one `std.mem.sort` at the end,
+    //       or 2. multiple `orderedRemove` and no `std.mem.sort`?
     // Remove in reverse to avoid OOB.
     var i = contig_addrs_len - 1;
     while (i > 0) : (i -= 1)
         _ = addr_mem.zp_free.swapRemove(contig_addrs_i + i);
     const start_addr = addr_mem.zp_free.swapRemove(contig_addrs_i + i);
-    std.sort.sort(u8, addr_mem.zp_free.slice(), {}, std.sort.asc(u8));
+    std.mem.sort(u8, addr_mem.zp_free.slice(), {}, std.sort.asc(u8));
     return start_addr;
 }
 
@@ -246,7 +245,7 @@ pub fn free(addr_mem: *AddrMem, addr: Addr, byte_count: u16) void {
             var i: u8 = 0;
             while (i < byte_count) : (i += 1)
                 addr_mem.zp_free.appendAssumeCapacity(zp_addr + i);
-            std.sort.sort(u8, addr_mem.zp_free.slice(), {}, std.sort.asc(u8));
+            std.mem.sort(u8, addr_mem.zp_free.slice(), {}, std.sort.asc(u8));
         },
         .abs => |abs_addr| {
             // TODO: free memory!

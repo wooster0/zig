@@ -39,7 +39,7 @@ pub fn emitMir(emit: *Emit) !void {
     log.debug("emit.code: len/capacity: {d}/{d}", .{ emit.code.items.len, emit.code.capacity });
     defer log.debug("emit.code: len/capacity: {d}/{d}", .{ emit.code.items.len, emit.code.capacity });
 
-    for (mir_tags) |tag, inst| {
+    for (mir_tags, 0..) |tag, inst| {
         // Emit the opcode.
         try emit.emitByte(@enumToInt(tag));
 

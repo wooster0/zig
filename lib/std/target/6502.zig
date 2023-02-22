@@ -16,7 +16,7 @@ pub const all_features = blk: {
     std.debug.assert(len <= CpuFeature.Set.needed_bit_count);
     var result: [len]CpuFeature = undefined;
     const ti = @typeInfo(Feature);
-    for (result) |*elem, i| {
+    for (result, 0..) |*elem, i| {
         elem.index = i;
         elem.name = ti.Enum.fields[i].name;
     }

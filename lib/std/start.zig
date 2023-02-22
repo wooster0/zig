@@ -46,8 +46,9 @@ comptime {
                     @export(spirvMain2, .{ .name = "main" });
             } else if (builtin.os.tag == .wasi and @hasDecl(root, "main")) {
                 @export(wasiMain2, .{ .name = "_start" });
-            } else if (builtin.os.tag == .c64 and @hasDecl(root, "main")) {
-                @export(c64_start, .{ .name = "_start" });
+            } else if (builtin.os.tag == .c64) {
+                if (@hasDecl(root, "main"))
+                    @export(c64_entry, .{ .name = "entry" });
             } else {
                 if (!@hasDecl(root, "_start")) {
                     @export(_start2, .{ .name = "_start" });

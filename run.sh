@@ -1,12 +1,15 @@
 #!/bin/sh
 
-file_name=bitwise
+file_name=hello
 
-stage3/bin/zig build-exe $file_name.zig \
+zig-out/bin/zig build-exe $file_name.zig \
     -ofmt=prg \
     -target 6502-c64 \
-    --zig-lib-dir lib \
+    `#-target 6502-freestanding` \
+    --zig-lib-dir std-stub \
     -fno-LLVM \
+    `#--basic-bootstrap` \
+    `#--no-basic-bootstrap` \
     --verbose-air \
     --debug-log codegen \
     --debug-log emit \

@@ -89,6 +89,7 @@ pub const Inst = struct {
         // Instructions are sorted by opcode.
         // zig fmt: off
         brk_impl     = 0x00, // BRK          ; BReaK
+        jam_impl     = 0x02, // JAM          ; Jam
         ora_zp       = 0x05, // ORA $XX      ; OR A
         ora_imm      = 0x09, // ORA          ; OR A
         ora_abs      = 0x0D, // ORA $XXXX    ; OR A
@@ -184,6 +185,7 @@ pub const Inst = struct {
         pub fn getAffectedReg(tag: Tag) ?Reg {
             return switch (tag) {
                 .brk_impl => null,
+                .jam_impl => null,
                 .ora_zp => .a,
                 .ora_imm => .a,
                 .ora_abs => .a,

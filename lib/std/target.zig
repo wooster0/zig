@@ -1873,7 +1873,7 @@ pub const Target = struct {
             .avr,
             .msp430,
             .spu_2,
-                    .@"6502",
+            .@"6502",
             => return 16,
 
             .arc,

@@ -83,7 +83,6 @@ const Block = struct {
     /// TODO(meeting): this works around something that the Zig compiler should be able to do; see:
     /// * https://github.com/ziglang/zig/issues/6256
     /// * https://github.com/ziglang/zig/issues/13111
-    /// * https://github.com/ziglang/zig/issues/14003
     //used: bool = false, // TODO: actually use this field
 
     fn deinit(block: *Block, allocator: Allocator) void {
@@ -379,7 +378,7 @@ pub fn getAllBlocks(prg: *Prg, allocator: Allocator) ![]const DeclIndexAndBlock 
     }
     const slice = try decl_index_and_blocks.toOwnedSlice();
     // We sort by block index to make sure we output and iterate the blocks in the same order every time.
-    std.sort.sort(DeclIndexAndBlock, slice, {}, struct {
+    std.mem.sort(DeclIndexAndBlock, slice, {}, struct {
         fn comparator(context: void, lhs: DeclIndexAndBlock, rhs: DeclIndexAndBlock) bool {
             _ = context;
             return lhs.block.index < rhs.block.index;
@@ -579,9 +578,10 @@ pub fn updateFunc(prg: *Prg, module: *Module, func: *Module.Fn, air: Air, livene
 }
 
 pub fn getDeclVAddr(prg: *Prg, decl_index: Module.Decl.Index, reloc_info: link.File.RelocInfo) !u64 {
-    // TODO
     _ = prg;
-    debug.panic("do we need `getDeclVAddr`? {}, {}", .{ decl_index, reloc_info });
+    _ = decl_index;
+    _ = reloc_info;
+    return 0;
 }
 
 pub fn updateDeclExports(
@@ -591,18 +591,13 @@ pub fn updateDeclExports(
     exports: []const *Module.Export,
 ) !void {
     // TODO: do we use prg.base.options.entry_addr for anything?
-
-    // TODO: why "_start"? we could use a prettier name more conventional in the Commodore community
-    //       (entry, main, start?). we are free to choose any name we like.
-    const entry_name = prg.base.options.entry orelse "_start";
-
+    const entry_name = prg.base.options.entry orelse "entry";
     log.debug("updateDeclExports for {}...", .{decl_index});
     for (exports) |@"export"| {
         const options_are_default =
             @"export".options.visibility == .default and
             @"export".options.section == null and
             @"export".options.linkage == .Strong;
-
         if (mem.eql(u8, @"export".options.name, entry_name)) {
             if (!options_are_default) {
                 try module.failed_exports.putNoClobber(
@@ -615,7 +610,6 @@ pub fn updateDeclExports(
                         .{entry_name},
                     ),
                 );
-                return error.AnalysisFail;
             }
             const gop = try prg.blocks.getOrPut(prg.base.allocator, decl_index);
             if (gop.found_existing) {
@@ -640,7 +634,6 @@ pub fn updateDeclExports(
                     .{entry_name},
                 ),
             );
-            return error.AnalysisFail;
         }
     }
 }

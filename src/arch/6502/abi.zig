@@ -23,7 +23,7 @@ pub fn getZeroPageAddresses(target: std.Target) std.BoundedArray(u8, 256) {
             var i: u8 = 0x3;
             while (i < 0x20) : (i += 1)
                 addrs.appendAssumeCapacity(i);
-            std.sort.sort(u8, addrs.slice(), {}, std.sort.asc(u8));
+            std.mem.sort(u8, addrs.slice(), {}, std.sort.asc(u8));
         },
         .freestanding => {
             // Assume everything is free.

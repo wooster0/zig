@@ -160,7 +160,7 @@ pub fn generate(
     liveness: Liveness,
     code: *std.ArrayList(u8),
     debug_output: DebugInfoOutput,
-) codegen.GenerateSymbolError!Result {
+) codegen.CodeGenError!Result {
     _ = debug_output;
 
     const addr_mem = AddrMem.init(bin_file.options.target, bin_file);
@@ -279,7 +279,7 @@ fn checkCompileOptions(func: *Func) !void {
     //                I didn't put this in the linker because this applies to the architecture itself and
     //                has nothing to do with the output format.
     if (options.pic or options.pie)
-        return try func.fail("position-independent code unsupported", .{});
+        return func.fail("position-independent code unsupported", .{});
 }
 
 //
@@ -383,23 +383,23 @@ fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
             return values;
         },
         .Unspecified, .C => {
-            for (values.args) |*arg, i| {
+            for (values.args, 0..) |*arg, i| {
                 const param_ty = param_types[i];
                 const param_size = func.getSize(param_ty).?;
                 // TODO: preserve zero page addresses for this stuff once we have more of them
                 // TODO: if size is > 3 bytes, allocate and pass pointer as A:X or something
                 if (param_size != 1)
-                    return try func.fail("TODO: support parameters bigger than 1 byte", .{});
+                    return func.fail("TODO: support parameters bigger than 1 byte", .{});
                 arg.* = switch (i) {
                     0 => .{ .reg = .a },
                     1 => .{ .reg = .x },
                     2 => .{ .reg = .y },
-                    else => return try func.fail("TODO: support more than 3 parameters", .{}),
+                    else => return func.fail("TODO: support more than 3 parameters", .{}),
                 };
             }
         },
         else => {
-            const err = try func.fail("unsupported calling convention {}", .{cc});
+            const err = func.fail("unsupported calling convention {}", .{cc});
             try func.failAddNote("supported are .Naked, .Unspecified, and .C", .{});
             return err;
         },
@@ -411,7 +411,7 @@ fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
     } else {
         const ret_ty_size = func.getSize(ret_ty).?;
         if (ret_ty_size != 1)
-            return try func.fail("TODO: support return values bigger than 1 byte", .{});
+            return func.fail("TODO: support return values bigger than 1 byte", .{});
         values.ret_val = .{ .reg = .a };
     }
 
@@ -426,14 +426,14 @@ fn resolveCallingConventionValues(func: *Func, fn_ty: Type) !CallMVs {
 fn allocAddrMem(func: *Func, ty: Type) !MV {
     if (!ty.hasRuntimeBitsIgnoreComptime()) {
         // TODO: return 0 address? think about this when implementing optionals
-        return try func.fail("TODO: handle non-sized alloc", .{});
+        return func.fail("TODO: handle non-sized alloc", .{});
     }
 
     if (ty.zigTypeTag() == .Pointer) {
         // Pointers can only be dereferenced in the zero page so we need to put pointers there
         // and cannot allow the pointer to be allocated elsewhere.
         const val = func.addr_mem.alloc(2, .zp) orelse {
-            const err = try func.fail("unable to allocate pointer due to zero page shortage", .{});
+            const err = func.fail("unable to allocate pointer due to zero page shortage", .{});
             try func.failAddNote("try reducing your program's pointer allocations", .{});
             return err;
         };
@@ -446,10 +446,10 @@ fn allocAddrMem(func: *Func, ty: Type) !MV {
     // * TODO: list more
     // TODO: open issue for ` var a: u65535 = undefined;` and `var a: [65535]u65535 = undefined;` etc. overflowing here.
     //       fix this in src/type.zig and then see if we can assert this getSize to not fail.
-    const size = func.getSize(ty) orelse return try func.fail("type {} too big to fit in address space", .{ty.fmt(func.getMod())});
+    const size = func.getSize(ty) orelse return func.fail("type {} too big to fit in address space", .{ty.fmt(func.getMod())});
     const val = func.addr_mem.alloc(size, .any) orelse {
         // TODO: test this error
-        const err = try func.fail("program depleted all {} bytes of addressable memory", .{func.addr_mem.getMax(func.getTarget())});
+        const err = func.fail("program depleted all {} bytes of addressable memory", .{func.addr_mem.getMax(func.getTarget())});
         try func.failAddNote("try reducing your program's stack memory allocations", .{});
         return err;
     };
@@ -471,7 +471,7 @@ fn allocRegMem(
     // TODO: remove error union from this function's return type after all TODOs are done
     if (!ty.hasRuntimeBitsIgnoreComptime()) {
         // TODO: return 0 address? think about this when implementing optionals
-        return try func.fail("TODO: handle non-sized alloc", .{});
+        return func.fail("TODO: handle non-sized alloc", .{});
     }
     const bit_size = ty.bitSize(func.getTarget());
     if (bit_size > 8)
@@ -722,6 +722,7 @@ fn storeA(func: *Func, val: MV, index: MV) !void {
 //       This was due to a lot of logic repeating itself in the old memory load-store architecture (find it below `trans`).
 
 /// Transfers from source to destination a value of the given type.
+// TODO: we probably just have to get rid of this if we want to fix the bloat this causes because of the inlined memsets and memcpys
 fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
     const size = func.getSize(ty).?;
     log.debug("transferring {} to {} (size={}B,ty={})", .{ src, dst, size, ty.tag() });
@@ -1519,18 +1520,23 @@ fn processDeath(func: *Func, op: Air.Inst.Index, res: MV) void {
     if (func.air.instructions.items(.tag)[op] == .constant) return; // Constants do not die.
 
     const dead = func.getResolvedInst(op);
+    _ = res;
 
     // In some cases (such as @bitCast), an operand
     // may be the same MV as the result.
     // in that case, prevent death and subsequent deallocation.
-    if (dead.eql(res))
-        return;
+    // TODO: after the changes to airBitCast, airPtrToInt, and airBoolToInt (and more in the future),
+    //       this should no longer be required and we can remove `eql`!
+    //    if (dead.eql(res))
+    //        return;
 
     func.getCurrentBranch().inst_vals.putAssumeCapacity(op, .none);
     log.debug("%{} = {}", .{ op, MV{ .none = {} } });
 
     // TODO: investigate https://github.com/ziglang/zig/pull/14675/commits/994c9d673f9e48acb204eb7098817d1886b07349
     //       and see how it can help us free memory correctly.
+    //       UPDATE: that PR has been closed. kubkon is working on a different fix. stay up to date with that.
+    //       here it is: https://github.com/ziglang/zig/pull/14685
     switch (dead) {
         .none => unreachable,
         .imm => unreachable,
@@ -1731,7 +1737,7 @@ fn lowerDeclRef(func: *Func, val: Value, ty: Type, decl_index: Module.Decl.Index
 fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MV {
     log.debug("lowerUnnamedConst: ty = {}, val = {}", .{ val.fmtValue(ty, func.getMod()), ty.fmt(func.getMod()) });
     const symbol_index = func.bin_file.lowerUnnamedConst(.{ .ty = ty, .val = val }, func.getDeclIndex()) catch |err| {
-        return try func.fail("failed lowering unnamed constant: {}", .{err});
+        return func.fail("failed lowering unnamed constant: {}", .{err});
     };
     if (func.bin_file.cast(link.File.Prg)) |_| {
         const block_index = @intCast(u16, symbol_index);
@@ -1809,7 +1815,7 @@ fn getPreviousInst(func: *Func) Mir.Inst.Index {
     return @intCast(Mir.Inst.Index, func.mir_instructions.len - 1);
 }
 /// Returns the code size of this function up to this point.
-// TODO: rename getSize to getTypeSize and getLength to getCodeSize
+// TODO: rename getSize to getTypeSize or getSizeOf and getLength to getCodeSize
 fn getLength(func: *Func) u16 {
     var size: u16 = 0;
     var i: u16 = 0;
@@ -1827,11 +1833,9 @@ fn getLength(func: *Func) u16 {
 // Codegen fail handling
 //
 
-// TODO(meeting): the remote 6502 branch is currently broken because the type of this has to be
-//                error{ OutOfMemory, CodegenFail }
-//                change the return type back to `!error{CodegenFail}` and do `try func.fail` again if that will be possible again:
-//                https://github.com/ziglang/zig/issues/7913#issuecomment-1435655769
-fn fail(func: *Func, comptime fmt: []const u8, args: anytype) !error{CodegenFail} {
+// TODO: change the return type back to `!error{CodegenFail}` and do `try func.fail` if that will be possible again:
+//       https://github.com/ziglang/zig/issues/14698
+fn fail(func: *Func, comptime fmt: []const u8, args: anytype) error{ OutOfMemory, CodegenFail } {
     @setCold(true);
     func.err_msg = try Module.ErrorMsg.create(func.getAllocator(), func.src_loc, fmt, args);
     return error.CodegenFail;
@@ -1979,7 +1983,7 @@ fn intAddOrSub(
                 // NOTE: this is best implemented after implementing some basic branching stuff.
                 //       use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
                 //       to detect overflow to implement this.
-                return try func.fail("TODO: implement add/sub saturation", .{});
+                return func.fail("TODO: implement add/sub saturation", .{});
             }
             break :res maybe_dst.?;
         },
@@ -2074,7 +2078,7 @@ fn intAddOrSub(
                 // NOTE: this is best implemented after implementing some basic branching stuff.
                 //       use the V ("overflow") flag for signed integers and the C ("carry") flag for unsigned integers
                 //       to detect overflow to implement this.
-                return try func.fail("TODO: implement add/sub saturation", .{});
+                return func.fail("TODO: implement add/sub saturation", .{});
             }
             break :res maybe_dst.?;
         },
@@ -2145,10 +2149,10 @@ fn elemOffset(func: *Func, index: MV, index_ty: Type, elem_size: u16) !MV {
                 // TODO: shouldn't this work for indexes > 255 too (max u16)?
                 //       introduce MV.index or MV.index_imm just for this and lower it in lowerConstant
                 return MV{ .imm = imm * @intCast(u8, elem_size) };
-            return try func.fail("TODO: implement indexing pointers with elements of sizes > 1 with immediate index > 255", .{});
+            return func.fail("TODO: implement indexing pointers with elements of sizes > 1 with immediate index > 255", .{});
         },
         else => {
-            return try func.fail("TODO: implement indexing pointers with elements of sizes > 1 with runtime-known index", .{}); // TODO: multiply
+            return func.fail("TODO: implement indexing pointers with elements of sizes > 1 with runtime-known index", .{}); // TODO: multiply
         },
     }
 }
@@ -2182,8 +2186,6 @@ fn bitwise(
         .fast => if (size >= 0xFF) .runtime else .inlined,
         .small => if (size > 2) .runtime else .inlined,
     };
-
-    log.debug("loop_type: {}", .{loop_type});
 
     var maybe_dst: ?MV = maybe_desired_dst;
     var maybe_reg_a: ?MV = null;
@@ -2219,8 +2221,6 @@ fn bitwise(
                 }
             },
         };
-
-        log.debug("i: {d}, loc: {}", .{ i, index });
 
         const before = func.getLength();
 
@@ -2327,7 +2327,7 @@ fn bitwise(
             const br_inst_size = 2;
             try func.addInst(.bne_rel, .{ .rel = -offset - br_inst_size });
         } else {
-            const err = try func.fail("TODO: support jumping back from code size > 128", .{});
+            const err = func.fail("TODO: support jumping back from code size > 128", .{});
             try func.failAddNote("use .Debug, .ReleaseSafe, or .ReleaseFast for now or reduce your code size", .{});
             return err;
         }
@@ -2402,114 +2402,114 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory }!
     return switch (tag) {
         .arg => try func.airArg(inst),
         .add => try func.airFloatOrIntAddOrSub(inst, .add),
-        .add_optimized => try func.fail("TODO: implement add_optimized", .{}),
+        .add_optimized => func.fail("TODO: implement add_optimized", .{}),
         .addwrap => try func.airIntAddOrSub(inst, .addwrap),
-        .addwrap_optimized => try func.fail("TODO: implement addwrap_optimized", .{}),
+        .addwrap_optimized => func.fail("TODO: implement addwrap_optimized", .{}),
         .add_sat => try func.airIntAddOrSub(inst, .add_sat),
         .sub => try func.airFloatOrIntAddOrSub(inst, .sub),
-        .sub_optimized => try func.fail("TODO: implement sub_optimized", .{}),
+        .sub_optimized => func.fail("TODO: implement sub_optimized", .{}),
         .subwrap => try func.airIntAddOrSub(inst, .subwrap),
-        .subwrap_optimized => try func.fail("TODO: implement subwrap_optimized", .{}),
+        .subwrap_optimized => func.fail("TODO: implement subwrap_optimized", .{}),
         .sub_sat => try func.airIntAddOrSub(inst, .sub_sat),
-        .mul => try func.fail("TODO: implement mul", .{}),
-        .mul_optimized => try func.fail("TODO: implement mul_optimized", .{}),
-        .mulwrap => try func.fail("TODO: implement mulwrap", .{}),
-        .mulwrap_optimized => try func.fail("TODO: implement mulwrap_optimized", .{}),
-        .mul_sat => try func.fail("TODO: implement mul_sat", .{}),
-        .div_float => try func.fail("TODO: implement div_float", .{}),
-        .div_float_optimized => try func.fail("TODO: implement div_float_optimized", .{}),
-        .div_trunc => try func.fail("TODO: implement div_trunc", .{}),
-        .div_trunc_optimized => try func.fail("TODO: implement div_trunc_optimized", .{}),
-        .div_floor => try func.fail("TODO: implement div_floor", .{}),
-        .div_floor_optimized => try func.fail("TODO: implement div_floor_optimized", .{}),
-        .div_exact => try func.fail("TODO: implement div_exact", .{}),
-        .div_exact_optimized => try func.fail("TODO: implement div_exact_optimized", .{}),
-        .rem => try func.fail("TODO: implement rem", .{}),
-        .rem_optimized => try func.fail("TODO: implement rem_optimized", .{}),
-        .mod => try func.fail("TODO: implement mod", .{}),
-        .mod_optimized => try func.fail("TODO: implement mod_optimized", .{}),
+        .mul => func.fail("TODO: implement mul", .{}),
+        .mul_optimized => func.fail("TODO: implement mul_optimized", .{}),
+        .mulwrap => func.fail("TODO: implement mulwrap", .{}),
+        .mulwrap_optimized => func.fail("TODO: implement mulwrap_optimized", .{}),
+        .mul_sat => func.fail("TODO: implement mul_sat", .{}),
+        .div_float => func.fail("TODO: implement div_float", .{}),
+        .div_float_optimized => func.fail("TODO: implement div_float_optimized", .{}),
+        .div_trunc => func.fail("TODO: implement div_trunc", .{}),
+        .div_trunc_optimized => func.fail("TODO: implement div_trunc_optimized", .{}),
+        .div_floor => func.fail("TODO: implement div_floor", .{}),
+        .div_floor_optimized => func.fail("TODO: implement div_floor_optimized", .{}),
+        .div_exact => func.fail("TODO: implement div_exact", .{}),
+        .div_exact_optimized => func.fail("TODO: implement div_exact_optimized", .{}),
+        .rem => func.fail("TODO: implement rem", .{}),
+        .rem_optimized => func.fail("TODO: implement rem_optimized", .{}),
+        .mod => func.fail("TODO: implement mod", .{}),
+        .mod_optimized => func.fail("TODO: implement mod_optimized", .{}),
         .ptr_add => try func.airPtrArithmetic(inst, .ptr_add),
         .ptr_sub => try func.airPtrArithmetic(inst, .ptr_sub),
-        // TODO: wait for https://github.com/ziglang/zig/issues/14039 to be implemented first
-        //       before lowering the following two.
-        .max => try func.fail("TODO: implement max", .{}),
-        .min => try func.fail("TODO: implement min", .{}),
+        .max => func.fail("TODO: implement max", .{}),
+        .min => func.fail("TODO: implement min", .{}),
         .add_with_overflow => try func.airIntBinOpWithOverflow(inst, .add_with_overflow),
         .sub_with_overflow => try func.airIntBinOpWithOverflow(inst, .sub_with_overflow),
-        .mul_with_overflow => try func.fail("TODO: implement mul_with_overflow", .{}),
-        .shl_with_overflow => try func.fail("TODO: implement shl_with_overflow", .{}),
+        .mul_with_overflow => func.fail("TODO: implement mul_with_overflow", .{}),
+        .shl_with_overflow => func.fail("TODO: implement shl_with_overflow", .{}),
         .alloc => try func.airAlloc(inst),
-        .ret_ptr => try func.fail("TODO: implement ret_ptr", .{}),
+        .ret_ptr => func.fail("TODO: implement ret_ptr", .{}),
         // TODO: this tag should be called .asm
         .assembly => try func.airAsm(inst),
         .bit_and => try func.airBitwise(inst, .bit_and),
         .bit_or => try func.airBitwise(inst, .bit_or),
-        .shr => try func.fail("TODO: implement shr", .{}),
-        .shr_exact => try func.fail("TODO: implement shr_exact", .{}),
-        .shl => try func.fail("TODO: implement shl", .{}),
-        .shl_exact => try func.fail("TODO: implement shl_exact", .{}),
-        .shl_sat => try func.fail("TODO: implement shl_sat", .{}),
+        .shr => func.fail("TODO: implement shr", .{}),
+        .shr_exact => func.fail("TODO: implement shr_exact", .{}),
+        .shl => func.fail("TODO: implement shl", .{}),
+        .shl_exact => func.fail("TODO: implement shl_exact", .{}),
+        .shl_sat => func.fail("TODO: implement shl_sat", .{}),
         .xor => try func.airBitwise(inst, .xor),
-        .not => try func.fail("TODO: implement not", .{}),
+        .not => func.fail("TODO: implement not", .{}),
         // TODO: this tag should be called .bit_cast
         .bitcast => try func.airBitCast(inst),
         .block => try func.airBlock(inst),
         .loop => try func.airLoop(inst),
         .br => try func.airBr(inst),
+        .trap => try func.airTrap(inst),
         .breakpoint => try func.airBreakpoint(inst),
-        .ret_addr => try func.fail("TODO: implement ret_addr", .{}),
-        .frame_addr => try func.fail("TODO: implement frame_addr", .{}),
+        .ret_addr => func.fail("TODO: implement ret_addr", .{}),
+        .frame_addr => func.fail("TODO: implement frame_addr", .{}),
         .call => try func.airCall(inst, .auto),
         .call_always_tail => try func.airCall(inst, .always_tail),
         .call_never_tail => try func.airCall(inst, .never_tail),
         .call_never_inline => try func.airCall(inst, .never_inline),
+        // NOTE: Wasm's callIntrinsic in their CodeGen.zig seems relevant
         // TODO(meeting): can't we simply use compiler_rt for a lot of these?
         //                on another note, am I supposed to use the
         //                https://github.com/ziglang/zig/blob/master/lib/std/math/big/int.zig
         //                stuff to implement integers with bit count > 128?
-        .clz => try func.fail("TODO: implement clz", .{}),
-        .ctz => try func.fail("TODO: implement ctz", .{}),
+        .clz => func.fail("TODO: implement clz", .{}),
+        .ctz => func.fail("TODO: implement ctz", .{}),
         // TODO: this tag should be called .pop_count
-        .popcount => try func.fail("TODO: implement popcount", .{}), // TODO: for this one can't we use lib/compiler_rt/popcount.zig for example?
-        .byte_swap => try func.fail("TODO: implement byte_swap", .{}),
-        .bit_reverse => try func.fail("TODO: implement bit_reverse", .{}),
+        .popcount => func.fail("TODO: implement popcount", .{}), // TODO: for this one can't we use lib/compiler_rt/popcount.zig for example?
+        .byte_swap => func.fail("TODO: implement byte_swap", .{}),
+        .bit_reverse => func.fail("TODO: implement bit_reverse", .{}),
 
-        .sqrt => try func.fail("TODO: implement sqrt", .{}),
-        .sin => try func.fail("TODO: implement sin", .{}),
-        .cos => try func.fail("TODO: implement cos", .{}),
-        .tan => try func.fail("TODO: implement tan", .{}),
-        .exp => try func.fail("TODO: implement exp", .{}),
-        .exp2 => try func.fail("TODO: implement exp2", .{}),
-        .log => try func.fail("TODO: implement log", .{}),
-        .log2 => try func.fail("TODO: implement log2", .{}),
-        .log10 => try func.fail("TODO: implement log10", .{}),
-        .fabs => try func.fail("TODO: implement fabs", .{}),
-        .floor => try func.fail("TODO: implement floor", .{}),
-        .ceil => try func.fail("TODO: implement ceil", .{}),
-        .round => try func.fail("TODO: implement round", .{}),
-        .trunc_float => try func.fail("TODO: implement trunc_float", .{}),
-        .neg => try func.fail("TODO: implement neg", .{}),
-        .neg_optimized => try func.fail("TODO: implement neg_optimized", .{}),
+        .sqrt => func.fail("TODO: implement sqrt", .{}),
+        .sin => func.fail("TODO: implement sin", .{}),
+        .cos => func.fail("TODO: implement cos", .{}),
+        .tan => func.fail("TODO: implement tan", .{}),
+        .exp => func.fail("TODO: implement exp", .{}),
+        .exp2 => func.fail("TODO: implement exp2", .{}),
+        .log => func.fail("TODO: implement log", .{}),
+        .log2 => func.fail("TODO: implement log2", .{}),
+        .log10 => func.fail("TODO: implement log10", .{}),
+        .fabs => func.fail("TODO: implement fabs", .{}),
+        .floor => func.fail("TODO: implement floor", .{}),
+        .ceil => func.fail("TODO: implement ceil", .{}),
+        .round => func.fail("TODO: implement round", .{}),
+        .trunc_float => func.fail("TODO: implement trunc_float", .{}),
+        .neg => func.fail("TODO: implement neg", .{}),
+        .neg_optimized => func.fail("TODO: implement neg_optimized", .{}),
 
-        .cmp_lt => try func.fail("TODO: implement cmp_lt", .{}),
-        .cmp_lt_optimized => try func.fail("TODO: implement cmp_lt_optimized", .{}),
-        .cmp_lte => try func.fail("TODO: implement cmp_lte", .{}),
-        .cmp_lte_optimized => try func.fail("TODO: implement cmp_lte_optimized", .{}),
-        .cmp_eq => try func.fail("TODO: implement cmp_eq", .{}),
-        .cmp_eq_optimized => try func.fail("TODO: implement cmp_eq_optimized", .{}),
-        .cmp_gte => try func.fail("TODO: implement cmp_gte", .{}),
-        .cmp_gte_optimized => try func.fail("TODO: implement cmp_gte_optimized", .{}),
-        .cmp_gt => try func.fail("TODO: implement cmp_gt", .{}),
-        .cmp_gt_optimized => try func.fail("TODO: implement cmp_gt_optimized", .{}),
-        .cmp_neq => try func.fail("TODO: implement cmp_neq", .{}),
-        .cmp_neq_optimized => try func.fail("TODO: implement cmp_neq_optimized", .{}),
-        .cmp_vector => try func.fail("TODO: implement cmp_vector", .{}),
-        .cmp_vector_optimized => try func.fail("TODO: implement cmp_vector_optimized", .{}),
+        .cmp_lt => func.fail("TODO: implement cmp_lt", .{}),
+        .cmp_lt_optimized => func.fail("TODO: implement cmp_lt_optimized", .{}),
+        .cmp_lte => func.fail("TODO: implement cmp_lte", .{}),
+        .cmp_lte_optimized => func.fail("TODO: implement cmp_lte_optimized", .{}),
+        .cmp_eq => func.fail("TODO: implement cmp_eq", .{}),
+        .cmp_eq_optimized => func.fail("TODO: implement cmp_eq_optimized", .{}),
+        .cmp_gte => func.fail("TODO: implement cmp_gte", .{}),
+        .cmp_gte_optimized => func.fail("TODO: implement cmp_gte_optimized", .{}),
+        .cmp_gt => func.fail("TODO: implement cmp_gt", .{}),
+        .cmp_gt_optimized => func.fail("TODO: implement cmp_gt_optimized", .{}),
+        .cmp_neq => func.fail("TODO: implement cmp_neq", .{}),
+        .cmp_neq_optimized => func.fail("TODO: implement cmp_neq_optimized", .{}),
+        .cmp_vector => func.fail("TODO: implement cmp_vector", .{}),
+        .cmp_vector_optimized => func.fail("TODO: implement cmp_vector_optimized", .{}),
 
-        .cond_br => try func.fail("TODO: implement cond_br", .{}),
-        .switch_br => try func.fail("TODO: implement switch_br", .{}),
-        .@"try" => try func.fail("TODO: implement try", .{}),
-        .try_ptr => try func.fail("TODO: implement try_ptr", .{}),
+        .cond_br => func.fail("TODO: implement cond_br", .{}),
+        .switch_br => func.fail("TODO: implement switch_br", .{}),
+        .@"try" => func.fail("TODO: implement try", .{}),
+        .try_ptr => func.fail("TODO: implement try_ptr", .{}),
         .constant => unreachable, // Excluded from function bodies.
         .const_ty => unreachable, // Excluded from function bodies.
         .dbg_stmt => try func.airDbgStmt(inst),
@@ -2519,122 +2519,126 @@ fn genInst(func: *Func, inst: Air.Inst.Index) error{ CodegenFail, OutOfMemory }!
         .dbg_inline_end => try func.airDbgInline(inst),
         .dbg_var_ptr => try func.airDbgLocal(inst),
         .dbg_var_val => try func.airDbgLocal(inst),
-        .is_null => try func.fail("TODO: implement is_null", .{}),
-        .is_non_null => try func.fail("TODO: implement is_non_null", .{}),
-        .is_null_ptr => try func.fail("TODO: implement is_null_ptr", .{}),
-        .is_non_null_ptr => try func.fail("TODO: implement is_non_null_ptr", .{}),
-        .is_err => try func.fail("TODO: implement is_err", .{}),
-        .is_non_err => try func.fail("TODO: implement is_non_err", .{}),
-        .is_err_ptr => try func.fail("TODO: implement is_err_ptr", .{}),
-        .is_non_err_ptr => try func.fail("TODO: implement is_non_err_ptr", .{}),
+        .is_null => func.fail("TODO: implement is_null", .{}),
+        .is_non_null => func.fail("TODO: implement is_non_null", .{}),
+        .is_null_ptr => func.fail("TODO: implement is_null_ptr", .{}),
+        .is_non_null_ptr => func.fail("TODO: implement is_non_null_ptr", .{}),
+        .is_err => func.fail("TODO: implement is_err", .{}),
+        .is_non_err => func.fail("TODO: implement is_non_err", .{}),
+        .is_err_ptr => func.fail("TODO: implement is_err_ptr", .{}),
+        .is_non_err_ptr => func.fail("TODO: implement is_non_err_ptr", .{}),
         // TODO(meeting): why are the following two not generated on `x and y` and `x or y`
         //                but instead those expressions become a block and a cond_br?
-        .bool_and => try func.fail("TODO: implement bool_and", .{}),
-        .bool_or => try func.fail("TODO: implement bool_or", .{}),
+        .bool_and => func.fail("TODO: implement bool_and", .{}),
+        .bool_or => func.fail("TODO: implement bool_or", .{}),
         .load => try func.airLoad(inst),
         .ptrtoint => try func.airPtrToInt(inst),
         .bool_to_int => try func.airBoolToInt(inst),
         .ret => try func.airRet(inst),
-        .ret_load => try func.fail("TODO: implement ret_load", .{}),
+        .ret_load => func.fail("TODO: implement ret_load", .{}),
         .store => try func.airStore(inst),
+        .store_safe => func.fail("TODO", .{}),
         .unreach => try func.airUnreach(inst),
-        .fptrunc => try func.fail("TODO: implement fptrunc", .{}),
-        .fpext => try func.fail("TODO: implement fpext", .{}),
+        .fptrunc => func.fail("TODO: implement fptrunc", .{}),
+        .fpext => func.fail("TODO: implement fpext", .{}),
         // TODO: this tag should be called .int_cast
         .intcast => try func.airIntCast(inst),
-        .trunc => try func.fail("TODO: implement trunc", .{}),
-        .optional_payload => try func.fail("TODO: implement optional_payload", .{}),
-        .optional_payload_ptr => try func.fail("TODO: implement optional_payload_ptr", .{}),
-        .optional_payload_ptr_set => try func.fail("TODO: implement optional_payload_ptr_set", .{}),
-        .wrap_optional => try func.fail("TODO: implement wrap_optional", .{}),
-        .unwrap_errunion_payload => try func.fail("TODO: implement unwrap_errunion_payload", .{}),
-        .unwrap_errunion_err => try func.fail("TODO: implement unwrap_errunion_err", .{}),
-        .unwrap_errunion_payload_ptr => try func.fail("TODO: implement unwrap_errunion_payload_ptr", .{}),
-        .unwrap_errunion_err_ptr => try func.fail("TODO: implement unwrap_errunion_err_ptr", .{}),
-        .errunion_payload_ptr_set => try func.fail("TODO: implement errunion_payload_ptr_set", .{}),
-        .wrap_errunion_payload => try func.fail("TODO: implement wrap_errunion_payload", .{}),
-        .wrap_errunion_err => try func.fail("TODO: implement wrap_errunion_err", .{}),
-        .struct_field_ptr => try func.fail("TODO: implement struct_field_ptr", .{}),
-        .struct_field_ptr_index_0 => try func.fail("TODO: implement struct_field_ptr_index_0", .{}),
-        .struct_field_ptr_index_1 => try func.fail("TODO: implement struct_field_ptr_index_1", .{}),
-        .struct_field_ptr_index_2 => try func.fail("TODO: implement struct_field_ptr_index_2", .{}),
-        .struct_field_ptr_index_3 => try func.fail("TODO: implement struct_field_ptr_index_3", .{}),
-        .struct_field_val => try func.fail("TODO: implement struct_field_val", .{}),
-        .set_union_tag => try func.fail("TODO: implement set_union_tag", .{}),
-        .get_union_tag => try func.fail("TODO: implement get_union_tag", .{}),
-        .slice => try func.fail("TODO: implement slice", .{}),
-        .slice_len => try func.fail("TODO: implement slice_len", .{}),
-        .slice_ptr => try func.fail("TODO: implement slice_ptr", .{}),
-        .ptr_slice_len_ptr => try func.fail("TODO: implement ptr_slice_len_ptr", .{}),
-        .ptr_slice_ptr_ptr => try func.fail("TODO: implement ptr_slice_ptr_ptr", .{}),
+        .trunc => func.fail("TODO: implement trunc", .{}),
+        .optional_payload => func.fail("TODO: implement optional_payload", .{}),
+        .optional_payload_ptr => func.fail("TODO: implement optional_payload_ptr", .{}),
+        .optional_payload_ptr_set => func.fail("TODO: implement optional_payload_ptr_set", .{}),
+        .wrap_optional => func.fail("TODO: implement wrap_optional", .{}),
+        .unwrap_errunion_payload => func.fail("TODO: implement unwrap_errunion_payload", .{}),
+        .unwrap_errunion_err => func.fail("TODO: implement unwrap_errunion_err", .{}),
+        .unwrap_errunion_payload_ptr => func.fail("TODO: implement unwrap_errunion_payload_ptr", .{}),
+        .unwrap_errunion_err_ptr => func.fail("TODO: implement unwrap_errunion_err_ptr", .{}),
+        .errunion_payload_ptr_set => func.fail("TODO: implement errunion_payload_ptr_set", .{}),
+        .wrap_errunion_payload => func.fail("TODO: implement wrap_errunion_payload", .{}),
+        .wrap_errunion_err => func.fail("TODO: implement wrap_errunion_err", .{}),
+        .struct_field_ptr => func.fail("TODO: implement struct_field_ptr", .{}),
+        .struct_field_ptr_index_0 => func.fail("TODO: implement struct_field_ptr_index_0", .{}),
+        .struct_field_ptr_index_1 => func.fail("TODO: implement struct_field_ptr_index_1", .{}),
+        .struct_field_ptr_index_2 => func.fail("TODO: implement struct_field_ptr_index_2", .{}),
+        .struct_field_ptr_index_3 => func.fail("TODO: implement struct_field_ptr_index_3", .{}),
+        .struct_field_val => func.fail("TODO: implement struct_field_val", .{}),
+        .set_union_tag => func.fail("TODO: implement set_union_tag", .{}),
+        .get_union_tag => func.fail("TODO: implement get_union_tag", .{}),
+        .slice => func.fail("TODO: implement slice", .{}),
+        .slice_len => func.fail("TODO: implement slice_len", .{}),
+        .slice_ptr => func.fail("TODO: implement slice_ptr", .{}),
+        .ptr_slice_len_ptr => func.fail("TODO: implement ptr_slice_len_ptr", .{}),
+        .ptr_slice_ptr_ptr => func.fail("TODO: implement ptr_slice_ptr_ptr", .{}),
         .array_elem_val => try func.airArrayElemVal(inst),
-        .slice_elem_val => try func.fail("TODO: implement slice_elem_val", .{}),
-        .slice_elem_ptr => try func.fail("TODO: implement slice_elem_ptr", .{}),
+        .slice_elem_val => func.fail("TODO: implement slice_elem_val", .{}),
+        .slice_elem_ptr => func.fail("TODO: implement slice_elem_ptr", .{}),
         .ptr_elem_val => try func.airPtrElemVal(inst),
         .ptr_elem_ptr => try func.airPtrElemPtr(inst),
-        .array_to_slice => try func.fail("TODO: implement array_to_slice", .{}),
-        .float_to_int => try func.fail("TODO: implement float_to_int", .{}),
-        .float_to_int_optimized => try func.fail("TODO: implement float_to_int_optimized", .{}),
-        .int_to_float => try func.fail("TODO: implement int_to_float", .{}),
+        .array_to_slice => func.fail("TODO: implement array_to_slice", .{}),
+        .float_to_int => func.fail("TODO: implement float_to_int", .{}),
+        .float_to_int_optimized => func.fail("TODO: implement float_to_int_optimized", .{}),
+        .int_to_float => func.fail("TODO: implement int_to_float", .{}),
 
-        .reduce => try func.fail("TODO: implement reduce", .{}),
-        .reduce_optimized => try func.fail("TODO: implement reduce_optimized", .{}),
-        .splat => try func.fail("TODO: implement splat", .{}),
-        .shuffle => try func.fail("TODO: implement shuffle", .{}),
-        .select => try func.fail("TODO: implement select", .{}),
+        .reduce => func.fail("TODO: implement reduce", .{}),
+        .reduce_optimized => func.fail("TODO: implement reduce_optimized", .{}),
+        .splat => func.fail("TODO: implement splat", .{}),
+        .shuffle => func.fail("TODO: implement shuffle", .{}),
+        .select => func.fail("TODO: implement select", .{}),
 
-        // TODO: wait for https://github.com/ziglang/zig/issues/14040 to be implemented first
-        //       before lowering the following two.
-        .memset => try func.fail("TODO: implement memset", .{}),
-        .memcpy => try func.fail("TODO: implement memcpy", .{}),
+        .memset => func.fail("TODO: implement memset", .{}),
+        .memset_safe => func.fail("TODO: implement memset_safe", .{}),
+        .memcpy => func.fail("TODO: implement memcpy", .{}),
 
-        .cmpxchg_weak => try func.fail("TODO: implement cmpxchg_weak", .{}),
-        .cmpxchg_strong => try func.fail("TODO: implement cmpxchg_strong", .{}),
-        .fence => try func.fail("TODO: implement fence", .{}),
-        .atomic_load => try func.fail("TODO: implement atomic_load", .{}),
-        .atomic_store_unordered => try func.fail("TODO: implement atomic_store_unordered", .{}),
-        .atomic_store_monotonic => try func.fail("TODO: implement atomic_store_monotonic", .{}),
-        .atomic_store_release => try func.fail("TODO: implement atomic_store_release", .{}),
-        .atomic_store_seq_cst => try func.fail("TODO: implement atomic_store_seq_cst", .{}),
-        .atomic_rmw => try func.fail("TODO: implement atomic_rmw", .{}),
+        .cmpxchg_weak => func.fail("TODO: implement cmpxchg_weak", .{}),
+        .cmpxchg_strong => func.fail("TODO: implement cmpxchg_strong", .{}),
+        .fence => func.fail("TODO: implement fence", .{}),
+        .atomic_load => func.fail("TODO: implement atomic_load", .{}),
+        .atomic_store_unordered => func.fail("TODO: implement atomic_store_unordered", .{}),
+        .atomic_store_monotonic => func.fail("TODO: implement atomic_store_monotonic", .{}),
+        .atomic_store_release => func.fail("TODO: implement atomic_store_release", .{}),
+        .atomic_store_seq_cst => func.fail("TODO: implement atomic_store_seq_cst", .{}),
+        .atomic_rmw => func.fail("TODO: implement atomic_rmw", .{}),
 
-        .is_named_enum_value => try func.fail("TODO: implement is_named_enum_value", .{}),
+        .is_named_enum_value => func.fail("TODO: implement is_named_enum_value", .{}),
 
-        .tag_name => try func.fail("TODO: implement tag_name", .{}),
+        .tag_name => func.fail("TODO: implement tag_name", .{}),
 
-        .error_name => try func.fail("TODO: implement error_name", .{}),
+        .error_name => func.fail("TODO: implement error_name", .{}),
 
-        .error_set_has_value => try func.fail("TODO: implement error_set_has_value", .{}),
+        .error_set_has_value => func.fail("TODO: implement error_set_has_value", .{}),
 
-        .aggregate_init => try func.fail("TODO: implement aggregate_init", .{}),
+        .aggregate_init => func.fail("TODO: implement aggregate_init", .{}),
 
-        .union_init => try func.fail("TODO: implement union_init", .{}),
+        .union_init => func.fail("TODO: implement union_init", .{}),
 
-        .prefetch => try func.fail("TODO: implement prefetch", .{}),
+        .prefetch => func.fail("TODO: implement prefetch", .{}),
 
-        .mul_add => try func.fail("TODO: implement mul_add", .{}),
+        .mul_add => func.fail("TODO: implement mul_add", .{}),
 
-        .field_parent_ptr => try func.fail("TODO: implement field_parent_ptr", .{}),
+        .field_parent_ptr => func.fail("TODO: implement field_parent_ptr", .{}),
 
         .wasm_memory_size => unreachable,
         .wasm_memory_grow => unreachable,
 
-        .cmp_lt_errors_len => try func.fail("TODO: implement cmp_lt_errors_len", .{}),
+        .cmp_lt_errors_len => func.fail("TODO: implement cmp_lt_errors_len", .{}),
 
-        .err_return_trace => try func.fail("TODO: implement err_return_trace", .{}),
+        .err_return_trace => func.fail("TODO: implement err_return_trace", .{}),
 
-        .set_err_return_trace => try func.fail("TODO: implement set_err_return_trace", .{}),
+        .set_err_return_trace => func.fail("TODO: implement set_err_return_trace", .{}),
 
-        .addrspace_cast => try func.fail("TODO: implement addrspace_cast", .{}),
+        .addrspace_cast => func.fail("TODO: implement addrspace_cast", .{}),
 
-        .save_err_return_trace_index => try func.fail("TODO: implement save_err_return_trace_index", .{}),
+        .save_err_return_trace_index => func.fail("TODO: implement save_err_return_trace_index", .{}),
 
-        .vector_store_elem => try func.fail("TODO: implement vector_store_elem", .{}),
+        .vector_store_elem => func.fail("TODO: implement vector_store_elem", .{}),
 
-        .c_va_arg => try func.fail("TODO: implement c_va_arg", .{}),
-        .c_va_copy => try func.fail("TODO: implement c_va_copy", .{}),
-        .c_va_end => try func.fail("TODO: implement c_va_end", .{}),
-        .c_va_start => try func.fail("TODO: implement c_va_start", .{}),
+        .c_va_arg => func.fail("TODO: implement c_va_arg", .{}),
+        .c_va_copy => func.fail("TODO: implement c_va_copy", .{}),
+        .c_va_end => func.fail("TODO: implement c_va_end", .{}),
+        .c_va_start => func.fail("TODO: implement c_va_start", .{}),
+
+        .work_item_id => func.fail("unsupported builtin", .{}),
+        .work_group_size => func.fail("unsupported builtin", .{}),
+        .work_group_id => func.fail("unsupported builtin", .{}),
     };
 }
 
@@ -2667,7 +2671,7 @@ fn airFloatOrIntAddOrSub(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !v
     assert(lhs_ty.eql(rhs_ty, func.getMod()));
     const ty = lhs_ty;
     const res = switch (ty.zigTypeTag()) {
-        .Float => return try func.fail("TODO: implement float binary operations", .{}),
+        .Float => return func.fail("TODO: implement float binary operations", .{}),
         .Int => try func.intAddOrSub(op, lhs, rhs, ty, inst, null),
         else => unreachable,
     };
@@ -2773,11 +2777,11 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
             extra_i += (constraint.len + name.len + (2 + 3)) / 4;
 
             if (constraint.len < 3 or constraint[0] != '{' or constraint[constraint.len - 1] != '}') {
-                return try func.fail("unknown `asm` input constraint: \"{s}\"", .{constraint});
+                return func.fail("unknown `asm` input constraint: \"{s}\"", .{constraint});
             }
             const reg_name = constraint[1 .. constraint.len - 1];
             const reg = Reg.parse(reg_name) orelse {
-                const err = try func.fail("unknown register \"{s}\"", .{reg_name});
+                const err = func.fail("unknown register \"{s}\"", .{reg_name});
                 try func.failAddNote("possible registers are A, X, and Y", .{});
                 return err;
             };
@@ -2786,7 +2790,7 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
             const input_ty = func.air.typeOf(input);
             // TODO: maybe move this error into setRegMem after supporting types with bit width <= 8
             if (func.getSize(input_ty).? != 1)
-                return try func.fail("unable to load non-8-bit-sized into {c} register", .{std.ascii.toUpper(reg_name[0])});
+                return func.fail("unable to load non-8-bit-sized into {c} register", .{std.ascii.toUpper(reg_name[0])});
             if (!(input_val == .reg and input_val.reg == reg)) {
                 const reg_val = try func.freeReg(reg, null);
                 // DEPRECATED: try func.setRegMem(input_ty, reg, input_val);
@@ -2804,6 +2808,8 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
             try func.addInst(.nop_impl, .{ .none = {} });
         } else {
             // TODO: src/arch/6502/Asm.zig could be the place to implement a full-fledged assembler
+            // TODO(meeting): running `zig build-exe -h` shows ".s    Target-specific assembly source code" as a supported file type.
+            //                if I ever write a fully-fledged assembler, will I be able to expose it both through `asm` and that file type?
             assert(asm_source.len == 0);
         }
 
@@ -2836,11 +2842,27 @@ fn airBitwise(func: *Func, inst: Air.Inst.Index, op: Air.Inst.Tag) !void {
     func.finishAir(inst, res, &.{ bin_op.lhs, bin_op.rhs });
 }
 
+// TODO: put this somewhere: "the 6502 has no CPU cache, so code size doesn't have a direct impact on performance."
+
+// TODO: needs that change
 fn airBitCast(func: *Func, inst: Air.Inst.Index) !void {
-    // This is only a change at the type system level.
+    if (true) @panic("");
     const ty_op = func.air.instructions.items(.data)[inst].ty_op;
-    _ = ty_op.ty;
-    const res = try func.resolveInst(ty_op.operand);
+    const ty = func.air.getRefType(ty_op.ty);
+    const res = if (func.liveness.isUnused(inst)) .none else res: {
+        const operand = try func.resolveInst(ty_op.operand);
+        if (func.reuseOperand(inst, ty_op.operand, 0, operand)) break :res operand;
+        //const operand_lock = switch (operand) {
+        //    .register => |reg| func.register_manager.lockReg(reg),
+        //    .register_overflow => |ro| func.register_manager.lockReg(ro.reg),
+        //    else => null,
+        //};
+        //defer if (operand_lock) |lock| func.register_manager.unlockReg(lock);
+        const dst = try func.allocAddrOrRegMem(ty, inst);
+        try func.trans(dst, operand, ty);
+        break :res dst;
+    };
+    log.debug("airBitCast(%{d}): {}", .{ inst, res });
     func.finishAir(inst, res, &.{ty_op.operand});
 }
 
@@ -2919,6 +2941,12 @@ fn airBr(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, .none, &.{br.operand});
 }
 
+fn airTrap(func: *Func, inst: Air.Inst.Index) !void {
+    // Emit JAM, also documented as KIL or HLT.
+    try func.addInst(.jam_impl, .{ .none = {} });
+    func.finishAir(inst, .none, &.{});
+}
+
 fn airBreakpoint(func: *Func, inst: Air.Inst.Index) !void {
     // Examples of the behavior of BRK:
     // * On the Commodore 64 it clears the screen and resets.
@@ -2943,7 +2971,7 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
         .no_async,
         .always_tail,
         .always_inline,
-        => return try func.fail("unsupported call modifier {}", .{modifier}),
+        => return func.fail("unsupported call modifier {}", .{modifier}),
     }
 
     const pl_op = func.air.instructions.items(.data)[inst].pl_op;
@@ -2961,7 +2989,7 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
     var call_vals = try func.resolveCallingConventionValues(fn_ty);
     defer call_vals.deinit(func.getAllocator());
 
-    for (call_vals.args) |dst, i| {
+    for (call_vals.args, 0..) |dst, i| {
         // `dst` is where we want the argument according to the calling convention (the "specification") and
         // `src` is where the argument currently is.
         const src = try func.resolveInst(args[i]);
@@ -2984,9 +3012,9 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
         } else if (fn_val.castTag(.extern_fn)) |_| {
             // TODO: move this error into the PRG linker. this is PRG-specific!
             //       also, start erroring for `extern var` and `extern const`.
-            return try func.fail("extern functions not supported", .{});
+            return func.fail("extern functions not supported", .{});
         } else if (fn_val.castTag(.decl_ref)) |_| {
-            return try func.fail("TODO implement calling bitcasted functions", .{});
+            return func.fail("TODO implement calling bitcasted functions", .{});
         } else if (fn_val.castTag(.int_u64)) |int| {
             try func.addInst(.jsr_abs, .{ .abs = .{ .fixed = @intCast(u16, int.data) } });
         } else unreachable;
@@ -3053,14 +3081,18 @@ fn airLoad(func: *Func, inst: Air.Inst.Index) !void {
     func.finishAir(inst, res, &.{ty_op.operand});
 }
 
+// TODO: needs that change
 fn airPtrToInt(func: *Func, inst: Air.Inst.Index) !void {
+    if (true) @panic("");
     // This is only a change at the type system level.
     const un_op = func.air.instructions.items(.data)[inst].un_op;
     const res = try func.resolveInst(un_op);
     func.finishAir(inst, res, &.{un_op});
 }
 
+// TODO: needs that change
 fn airBoolToInt(func: *Func, inst: Air.Inst.Index) !void {
+    if (true) @panic("");
     // This is only a change at the type system level.
     const un_op = func.air.instructions.items(.data)[inst].un_op;
     const res = try func.resolveInst(un_op);
@@ -3109,7 +3141,7 @@ fn airIntCast(func: *Func, inst: Air.Inst.Index) !void {
     const dst_size = dst_ty.abiSize(func.getTarget());
     const dst: MV = dst: {
         if (op_ty_info.signedness != dst_ty_info.signedness)
-            return try func.fail("TODO: handle @intCast with different signedness", .{});
+            return func.fail("TODO: handle @intCast with different signedness", .{});
 
         if (op_ty_info.bits == dst_ty_info.bits) {
             break :dst op;

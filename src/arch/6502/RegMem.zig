@@ -17,7 +17,6 @@ const Value = @import("../../value.zig").Value;
 const Air = @import("../../Air.zig");
 const Liveness = @import("../../Liveness.zig");
 const codegen = @import("../../codegen.zig");
-const GenerateSymbolError = codegen.GenerateSymbolError;
 const Result = codegen.Result;
 const DebugInfoOutput = codegen.DebugInfoOutput;
 const bits = @import("bits.zig");
