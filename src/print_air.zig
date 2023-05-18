@@ -51,8 +51,8 @@ pub fn write(stream: anytype, module: *Module, air: Air, liveness: ?Liveness) vo
         .indent = 2,
         .skip_body = false,
     };
-    writer.writeAllConstants(stream) catch return;
-    stream.writeByte('\n') catch return;
+    if (writer.writeAllConstants(stream) catch return)
+        stream.writeByte('\n') catch return;
     writer.writeBody(stream, air.getMainBody()) catch return;
 }
 
@@ -90,17 +90,20 @@ const Writer = struct {
     indent: usize,
     skip_body: bool,
 
-    fn writeAllConstants(w: *Writer, s: anytype) @TypeOf(s).Error!void {
+    fn writeAllConstants(w: *Writer, s: anytype) @TypeOf(s).Error!bool {
+        var wrote_constant = false;
         for (w.air.instructions.items(.tag), 0..) |tag, i| {
             const inst = @intCast(Air.Inst.Index, i);
             switch (tag) {
                 .constant, .const_ty => {
                     try w.writeInst(s, inst);
                     try s.writeByte('\n');
+                    wrote_constant = true;
                 },
                 else => continue,
             }
         }
+        return wrote_constant;
     }
 
     fn writeBody(w: *Writer, s: anytype, body: []const Air.Inst.Index) @TypeOf(s).Error!void {
