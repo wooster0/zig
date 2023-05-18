@@ -56,7 +56,21 @@ pub fn write(stream: anytype, module: *Module, air: Air, liveness: ?Liveness) vo
     writer.writeBody(stream, air.getMainBody()) catch return;
 }
 
-pub fn writeInst(
+pub fn writeRaw(stream: anytype, module: *Module, air: Air, liveness: ?Liveness) void {
+    var writer: Writer = .{
+        .module = module,
+        .gpa = module.gpa,
+        .air = air,
+        .liveness = liveness,
+        .indent = 0,
+        .skip_body = false,
+    };
+    if (writer.writeAllConstants(stream) catch return)
+        stream.writeByte('\n') catch return;
+    writer.writeBody(stream, air.getMainBody()) catch return;
+}
+
+fn writeInst(
     stream: anytype,
     inst: Air.Inst.Index,
     module: *Module,

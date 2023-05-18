@@ -38,6 +38,9 @@ pub const Update = struct {
         /// `-femit-h` and tests the produced header against the
         /// expected result
         Header: []const u8,
+        /// Check that the AIR emitted after semantic analysis of the code
+        /// matches our expectations. This is mainly to ensure efficient AIR.
+        Air: []const []const u8,
     },
 
     pub fn addSourceFile(update: *Update, name: []const u8, src: [:0]const u8) void {
@@ -137,6 +140,15 @@ pub const Case = struct {
             .files = std.ArrayList(File).init(self.updates.allocator),
             .name = "compile",
             .case = .{ .Compile = {} },
+        }) catch @panic("out of memory");
+        addSourceFile(self, "tmp.zig", src);
+    }
+
+    pub fn addAir(self: *Case, src: [:0]const u8, trailing_lines: []const []const u8) void {
+        self.updates.append(.{
+            .files = std.ArrayList(File).init(self.updates.allocator),
+            .name = "air",
+            .case = .{ .Air = trailing_lines },
         }) catch @panic("out of memory");
         addSourceFile(self, "tmp.zig", src);
     }
@@ -332,7 +344,7 @@ pub fn addCompile(
 pub fn addFromDir(ctx: *Cases, dir: std.fs.IterableDir) void {
     var current_file: []const u8 = "none";
     ctx.addFromDirInner(dir, &current_file) catch |err| {
-        std.debug.panic("test harness failed to process file '{s}': {s}\n", .{
+        std.debug.panic("test harness failed to process file '{s}': {s}", .{
             current_file, @errorName(err),
         });
     };
@@ -425,22 +437,18 @@ fn addFromDirInner(
                     case.addCompile(src);
                 },
                 .@"error" => {
-                    const errors = try manifest.trailingAlloc(ctx.arena);
+                    const errors = try manifest.trailingSplitAlloc(ctx.arena, true);
                     case.addError(src, errors);
                 },
                 .run => {
-                    var output = std.ArrayList(u8).init(ctx.arena);
-                    var trailing_it = manifest.trailing();
-                    while (trailing_it.next()) |line| {
-                        try output.appendSlice(line);
-                        try output.append('\n');
-                    }
-                    if (output.items.len > 0) {
-                        try output.resize(output.items.len - 1);
-                    }
-                    case.addCompareOutput(src, try output.toOwnedSlice());
+                    const output = try manifest.trailingJoinedAlloc(ctx.arena, true);
+                    case.addCompareOutput(src, output);
                 },
                 .cli => @panic("TODO cli tests"),
+                .air => {
+                    const output = try manifest.trailingSplitAlloc(ctx.arena, false);
+                    case.addAir(src, output);
+                },
             }
         }
     } else |err| {
@@ -569,6 +577,9 @@ pub fn lowerToBuildSteps(
                 parent_step.dependOn(&run.step);
             },
             .Header => @panic("TODO"),
+            .Air => {
+                parent_step.dependOn(&artifact.step);
+            },
         }
     }
 }
@@ -756,6 +767,7 @@ const TestManifestConfigDefaults = struct {
                 .run => "Exe",
                 .compile => "Obj",
                 .cli => @panic("TODO test harness for CLI tests"),
+                .air => "Obj",
             };
         } else if (std.mem.eql(u8, key, "is_test")) {
             return "0";
@@ -792,14 +804,15 @@ const TestManifest = struct {
         run,
         cli,
         compile,
+        air,
     };
 
     const TrailingIterator = struct {
         inner: std.mem.TokenIterator(u8),
 
-        fn next(self: *TrailingIterator) ?[]const u8 {
+        fn next(self: *TrailingIterator, trim: bool) ?[]const u8 {
             const next_inner = self.inner.next() orelse return null;
-            return std.mem.trim(u8, next_inner[2..], " \t");
+            return if (trim) std.mem.trim(u8, next_inner[2..], " \t") else next_inner[2..];
         }
     };
 
@@ -860,6 +873,8 @@ const TestManifest = struct {
                 break :blk .cli;
             } else if (std.mem.eql(u8, raw, "compile")) {
                 break :blk .compile;
+            } else if (std.mem.eql(u8, raw, "air")) {
+                break :blk .air;
             } else {
                 std.log.warn("unknown test case type requested: {s}", .{raw});
                 return error.UnknownTestCaseType;
@@ -927,11 +942,24 @@ const TestManifest = struct {
         };
     }
 
-    fn trailingAlloc(self: TestManifest, allocator: Allocator) error{OutOfMemory}![]const []const u8 {
+    fn trailingJoinedAlloc(manifest: TestManifest, allocator: Allocator, trim: bool) error{OutOfMemory}![]const u8 {
+        var output = std.ArrayList(u8).init(allocator);
+        var trailing_it = manifest.trailing();
+        while (trailing_it.next(trim)) |line| {
+            try output.appendSlice(line);
+            try output.append('\n');
+        }
+        if (output.items.len > 0) {
+            try output.resize(output.items.len - 1);
+        }
+        return try output.toOwnedSlice();
+    }
+
+    fn trailingSplitAlloc(self: TestManifest, allocator: Allocator, trim: bool) error{OutOfMemory}![]const []const u8 {
         var out = std.ArrayList([]const u8).init(allocator);
         defer out.deinit();
         var it = self.trailing();
-        while (it.next()) |line| {
+        while (it.next(trim)) |line| {
             try out.append(line);
         }
         return try out.toOwnedSlice();
@@ -1106,7 +1134,7 @@ pub fn main() !void {
                         case.addCompile(src);
                     },
                     .@"error" => {
-                        const errors = try manifest.trailingAlloc(arena);
+                        const errors = try manifest.trailingSplitAlloc(arena, true);
                         switch (strategy) {
                             .independent => {
                                 case.addError(src, errors);
@@ -1117,18 +1145,14 @@ pub fn main() !void {
                         }
                     },
                     .run => {
-                        var output = std.ArrayList(u8).init(arena);
-                        var trailing_it = manifest.trailing();
-                        while (trailing_it.next()) |line| {
-                            try output.appendSlice(line);
-                            try output.append('\n');
-                        }
-                        if (output.items.len > 0) {
-                            try output.resize(output.items.len - 1);
-                        }
-                        case.addCompareOutput(src, try output.toOwnedSlice());
+                        const output = try manifest.trailingJoinedAlloc(arena, true);
+                        case.addCompareOutput(src, output);
                     },
                     .cli => @panic("TODO cli tests"),
+                    .air => {
+                        const output = try manifest.trailingSplitAlloc(arena, false);
+                        case.addAir(src, output);
+                    },
                 }
             }
         }
@@ -1349,7 +1373,7 @@ fn runOneCase(
         try comp.update(&module_node);
         module_node.end();
 
-        if (update.case != .Error) {
+        if (update.case != .Error and update.case != .Air) {
             var all_errors = try comp.getAllErrorsAlloc();
             defer all_errors.deinit(allocator);
             if (all_errors.errorMessageCount() > 0) {
@@ -1426,7 +1450,7 @@ fn runOneCase(
             },
             .Execution => |expected_stdout| {
                 if (!std.process.can_spawn) {
-                    std.debug.print("Unable to spawn child processes on {s}, skipping test.\n", .{@tagName(builtin.os.tag)});
+                    std.debug.print("Unable to spawn child processes on {s}; skipping test.\n", .{@tagName(builtin.os.tag)});
                     continue :update; // Pass test.
                 }
 
@@ -1589,6 +1613,111 @@ fn runOneCase(
                 // We allow stderr to have garbage in it because wasmtime prints a
                 // warning about --invoke even though we don't pass it.
                 //std.testing.expectEqualStrings("", exec_result.stderr);
+            },
+            .Air => |trailing_lines| {
+                const mod = comp.bin_file.options.module.?;
+
+                //
+                // This is to remove clutter from the AIR.
+                //
+                const previous_optimize_mode = comp.bin_file.options.optimize_mode;
+                const previous_strip = comp.bin_file.options.strip;
+                // Omit safety checks because we already have tests for those.
+                comp.bin_file.options.optimize_mode = .ReleaseSmall;
+                defer comp.bin_file.options.optimize_mode = previous_optimize_mode;
+                // Omit debug statements because "error" test cases already test for good debugging experiences.
+                comp.bin_file.options.strip = true;
+                defer comp.bin_file.options.strip = previous_strip;
+
+                // We go through the trailing lines and find lines matching "function_name:" and then we iterate
+                // through all top-level decls of the file to look for a decl matching "function_name".
+                // Once we found it we generate AIR for that function and compare it to the AIR we got in the code block.
+                var i: usize = 0;
+                while (i < trailing_lines.len) : (i += 1) {
+                    var line = trailing_lines[i];
+                    if (line.len == 0) continue;
+                    if (line[0] == ' ') line = line[1..];
+
+                    // "function_name:"
+                    const function_name = if (line[line.len - 1] == ':') function_name: {
+                        break :function_name line[0 .. line.len - 1];
+                    } else function_name: {
+                        std.debug.print("function name \"{s}\" is missing trailing colon; continuing\n", .{line});
+                        break :function_name line;
+                    };
+                    i += 1;
+
+                    // Extract the code out of the code block.
+                    const expected_air = expected_air: {
+                        var expected_air = std.ArrayList(u8).init(allocator);
+
+                        const start = i;
+                        while (true) : (i += 1) {
+                            if (i == trailing_lines.len) {
+                                std.debug.print("end of AIR code block of function \"{s}\" is not \"```\"; continuing\n", .{function_name});
+                                break;
+                            }
+
+                            line = trailing_lines[i];
+                            if (line.len > 0 and line[0] == ' ') line = line[1..];
+
+                            // "```" begins and terminates a code block.
+                            if (i - start == 0) {
+                                if (!std.mem.eql(u8, line, "```")) {
+                                    std.debug.print("start of AIR code block of function \"{s}\" is not \"```\"; continuing\n", .{function_name});
+                                }
+                            } else if (std.mem.eql(u8, line, "```")) {
+                                break;
+                            } else {
+                                try expected_air.appendSlice(line);
+                                try expected_air.append('\n');
+                            }
+                        }
+
+                        break :expected_air expected_air;
+                    };
+                    defer expected_air.deinit();
+
+                    // Go through all decls and find the function.
+                    // TODO: there's a better way to do this
+                    const file = for (mod.import_table.keys()) |key| {
+                        if (std.mem.indexOf(u8, key, "tmp.zig") != null) break mod.import_table.get(key).?;
+                    } else unreachable;
+                    const decl_indices = mod.declPtr(file.root_decl.unwrap().?).src_namespace.decls.keys();
+                    const actual_air = actual_air: for (decl_indices) |decl_index| {
+                        const decl = mod.declPtr(decl_index);
+                        const decl_name = std.mem.span(decl.name);
+                        if (std.mem.eql(u8, decl_name, function_name)) {
+                            // TODO: I tried to do `try mod.ensureDeclAnalyzed(decl_index);` here so that we don't need to reference each function we want to test in an `export fn`
+                            // but it didn't work. Is there a different way to achieve that?
+                            //try mod.ensureDeclAnalyzed(decl_index);
+                            if (decl.getFunction()) |function| {
+                                // We found a match. Generate the AIR!
+
+                                var air = try mod.analyzeFnBody(function, allocator);
+                                defer air.deinit(allocator);
+
+                                var liveness = try @import("../../src/Liveness.zig").analyze(allocator, air);
+                                defer liveness.deinit(allocator);
+
+                                var printed_air = std.ArrayList(u8).init(arena);
+                                @import("../../src/print_air.zig").writeRaw(printed_air.writer(), mod, air, liveness);
+
+                                break :actual_air printed_air;
+                            } else {
+                                std.debug.print("decl \"{s}\" is not a function; failing\n", .{decl_name});
+                            }
+                        }
+                    } else {
+                        std.debug.print("could not find a function with name \"{s}\"; failing\n", .{function_name});
+                        return error.TestExpectedEqual;
+                    };
+                    defer actual_air.deinit();
+
+                    try std.testing.expectEqualStrings(expected_air.items, actual_air.items);
+                }
+
+                continue :update; // Pass test.
             },
         }
     }
