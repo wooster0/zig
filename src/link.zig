@@ -168,6 +168,7 @@ pub const Options = struct {
     max_memory: ?u64,
     shared_memory: bool,
     export_symbol_names: []const []const u8,
+    basic_bootstrap: bool,
     global_base: ?u64,
     is_native_os: bool,
     is_native_abi: bool,

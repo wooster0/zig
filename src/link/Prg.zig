@@ -322,38 +322,40 @@ fn writeHeader(prg: Prg) ![]const u8 {
             const load_address = prg.getLoadAddress();
             try writer.writeIntLittle(u16, load_address);
 
-            // TODO: -fno-basic-bootstrap or `-fbasic-bootstrap=false` etc. to allow omitting this entirely optional code
             // TODO: allow embedding custom BASIC commands? with `asm`?
-            //       shouldn't it be possible if I use `fno-basic-bootstrap` and then
+            //       shouldn't it be possible if I use `--no-basic-bootstrap` and then
             //       write the bootstrap code in comptime top-level asm at the top of the file?
-            // The following is minimal BASIC bootstrap code that allows us to run our program
-            // using the RUN command, right after loading it, making our program distributable.
+            if (prg.base.options.basic_bootstrap) {
+                // The following is minimal BASIC stub code that allows us to run our program
+                // using the RUN command, right after loading it, making our program distributable.
+                // Sometimes this can mean our program is run right upon start which is often desired.
 
-            // Pointer to the next BASIC line.
-            try writer.writeIntLittle(
-                u16,
-                load_address +
-                    10, // Size of what we write after this.
-            );
+                // Pointer to the next BASIC line.
+                try writer.writeIntLittle(
+                    u16,
+                    load_address +
+                        10, // Size of what we write after this.
+                );
 
-            // The following encodes the BASIC line "0 SYS 2061".
-            {
-                // Line marker.
+                // The following encodes the BASIC line "0 SYS 2061".
+                {
+                    // Line marker.
+                    try writer.writeIntLittle(u16, 0x0000);
+
+                    // SYS command token code.
+                    try writer.writeByte(0x9E);
+
+                    // No space required.
+
+                    // Execution address.
+                    try writer.writeAll("2061\x00");
+                }
+
+                // In our case this marks the end of our linked list.
                 try writer.writeIntLittle(u16, 0x0000);
-
-                // SYS command token code.
-                try writer.writeByte(0x9E);
-
-                // No space required.
-
-                // Execution address.
-                try writer.writeAll("2061\x00");
             }
-
-            // In our case this marks the end of our linked list.
-            try writer.writeIntLittle(u16, 0x0000);
         },
-        // NOTE: this is like -ofmt=raw...
+        // TODO: this is like -ofmt=raw...
         .freestanding => {},
         else => unreachable,
     }

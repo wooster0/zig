@@ -576,6 +576,7 @@ const usage_build_generic =
     \\  --shared-memory                (WebAssembly) use shared linear memory
     \\  --global-base=[addr]           (WebAssembly) where to start to place global data
     \\  --export=[value]               (WebAssembly) Force a symbol to be exported
+    \\  --no-basic-bootstrap           (BASIC) Omit bootstrapping code for running
     \\
     \\Test Options:
     \\  --test-filter [text]           Skip tests that do not match filter
@@ -859,6 +860,7 @@ fn buildOutputType(
     var linker_max_memory: ?u64 = null;
     var linker_shared_memory: bool = false;
     var linker_global_base: ?u64 = null;
+    var linker_basic_bootstrap: bool = true;
     var linker_print_gc_sections: bool = false;
     var linker_print_icf_sections: bool = false;
     var linker_print_map: bool = false;
@@ -1533,6 +1535,10 @@ fn buildOutputType(
                         linker_global_base = parseIntSuffix(arg, "--global-base=".len);
                     } else if (mem.startsWith(u8, arg, "--export=")) {
                         try linker_export_symbol_names.append(arg["--export=".len..]);
+                    } else if (mem.startsWith(u8, arg, "--basic-bootstrap")) {
+                        linker_basic_bootstrap = true;
+                    } else if (mem.startsWith(u8, arg, "--no-basic-bootstrap")) {
+                        linker_basic_bootstrap = false;
                     } else if (mem.eql(u8, arg, "-Bsymbolic")) {
                         linker_bind_global_refs_locally = true;
                     } else if (mem.eql(u8, arg, "--gc-sections")) {
@@ -2152,6 +2158,10 @@ fn buildOutputType(
                     };
                 } else if (mem.eql(u8, arg, "--export")) {
                     try linker_export_symbol_names.append(linker_args_it.nextOrFatal());
+                } else if (mem.eql(u8, arg, "--basic-bootstrap")) {
+                    linker_basic_bootstrap = true;
+                } else if (mem.eql(u8, arg, "--no-basic-bootstrap")) {
+                    linker_basic_bootstrap = false;
                 } else if (mem.eql(u8, arg, "--compress-debug-sections")) {
                     const arg1 = linker_args_it.nextOrFatal();
                     linker_compress_debug_sections = std.meta.stringToEnum(link.CompressDebugSections, arg1) orelse {
@@ -3469,6 +3479,7 @@ fn buildOutputType(
         .linker_opt_bisect_limit = linker_opt_bisect_limit,
         .linker_global_base = linker_global_base,
         .linker_export_symbol_names = linker_export_symbol_names.items,
+        .linker_basic_bootstrap = linker_basic_bootstrap,
         .linker_z_nocopyreloc = linker_z_nocopyreloc,
         .linker_z_nodelete = linker_z_nodelete,
         .linker_z_notext = linker_z_notext,
