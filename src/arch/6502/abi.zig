@@ -19,16 +19,18 @@ pub fn getZeroPageAddresses(target: std.Target) std.BoundedArray(u8, 256) {
             addrs.appendSliceAssumeCapacity(
                 &[_]u8{ 0x02, 0x2A, 0x52, 0xFB, 0xFC, 0xFD, 0xFE },
             );
+
             // TODO: this is a hack to get some more zp addrs before we properly fix the TODO above
             var i: u8 = 0x3;
             while (i < 0x20) : (i += 1)
                 addrs.appendAssumeCapacity(i);
+
             std.mem.sort(u8, addrs.slice(), {}, std.sort.asc(u8));
         },
         .freestanding => {
             // Assume everything is free.
             var i: u8 = 0;
-            while (i < 256) : (i += 1)
+            while (i < 255) : (i += 1)
                 addrs.appendAssumeCapacity(i);
         },
         else => unreachable,
