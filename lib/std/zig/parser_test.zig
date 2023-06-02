@@ -18,6 +18,102 @@ test "zig fmt: transform old for loop syntax to new" {
     );
 }
 
+test "zig fmt: directive inside array initialization expressions" {
+    try testTransform(
+        \\  const zigg_zagg = [_]u21{
+        \\    // zig fmt: off
+        \\    'ℤ', '1', '2', 'Ẑ', '4', 'ž', 'Ẑ', '7',
+        \\    '8', 'Ẑ', 'ž', 'b', 'Ẑ', 'd', 'e', 'ℤ',
+        \\    // zig fmt: on
+        \\};
+        \\
+        \\ const foo = .{
+        \\    // zig fmt: off
+        \\    "a",                           "b",
+        \\    "👨‍👩‍👧‍👦",  "d",
+        \\    // zig fmt: on
+        \\ };
+        \\
+        \\ const x=1;
+        \\
+        \\ const a = .{
+        \\    // zig fmt: off
+        \\    .{ 0,      1    },
+        \\    // zig fmt: on
+        \\ };
+        \\
+        \\ const b = 2;
+        \\test {
+        \\    _   =   1;
+        \\     }
+        \\
+    ,
+        \\const zigg_zagg = [_]u21{
+        \\    // zig fmt: off
+        \\    'ℤ', '1', '2', 'Ẑ', '4', 'ž', 'Ẑ', '7',
+        \\    '8', 'Ẑ', 'ž', 'b', 'Ẑ', 'd', 'e', 'ℤ',
+        \\    // zig fmt: on
+        \\};
+        \\
+        \\const foo = .{
+        \\    // zig fmt: off
+        \\    "a",                           "b",
+        \\    "👨‍👩‍👧‍👦",  "d",
+        \\    // zig fmt: on
+        \\};
+        \\
+        \\const x = 1;
+        \\
+        \\const a = .{
+        \\    // zig fmt: off
+        \\    .{ 0,      1    },
+        \\    // zig fmt: on
+        \\};
+        \\
+        \\const b = 2;
+        \\test {
+        \\    _ = 1;
+        \\}
+        \\
+    );
+}
+
+test "zig fmt: nested tuple literals" {
+    try testCanonical(
+        \\const foo = .{
+        \\    .{ 1, 2, 3 },
+        \\    .{
+        \\        .{
+        \\            "hello",
+        \\            "world",
+        \\        },
+        \\    },
+        \\};
+        \\
+    );
+}
+
+test "zig fmt: \"zig fmt: off\" at end of array initialization expressions" {
+    try testTransform(
+        \\const foo = .{
+        \\    "a", "b"
+        \\    // zig fmt: off
+        \\};
+        \\
+        \\const x  =  1;
+        \\
+    ,
+        \\const foo = .{
+        \\    "a",
+        \\    "b",
+        \\    // zig fmt: off
+        \\};
+        \\
+        \\const x  =  1;
+        \\
+    );
+}
+
 test "zig fmt: remove extra whitespace at start and end of file with comment between" {
     try testTransform(
         \\
@@ -746,17 +842,7 @@ test "zig fmt: sentinel slice with modifiers" {
     );
 }
 
-test "zig fmt: anon literal in array" {
-    try testCanonical(
-        \\var arr: [2]Foo = .{
-        \\    .{ .a = 2 },
-        \\    .{ .b = 3 },
-        \\};
-        \\
-    );
-}
-
-test "zig fmt: alignment in anonymous literal" {
+test "zig fmt: anon literal" {
     try testTransform(
         \\const a = .{
         \\    "U",     "L",     "F",
@@ -767,8 +853,22 @@ test "zig fmt: alignment in anonymous literal" {
         \\
     ,
         \\const a = .{
-        \\    "U",  "L",  "F",
-        \\    "U'", "L'", "F'",
+        \\    "U",
+        \\    "L",
+        \\    "F",
+        \\    "U'",
+        \\    "L'",
+        \\    "F'",
+        \\};
+        \\
+    );
+}
+
+test "zig fmt: anon literal in array" {
+    try testCanonical(
+        \\var arr: [2]Foo = .{
+        \\    .{ .a = 2 },
+        \\    .{ .b = 3 },
         \\};
         \\
     );
@@ -1959,7 +2059,7 @@ test "zig fmt: struct literal containing a multiline expression" {
     );
 }
 
-test "zig fmt: array literal with hint" {
+test "zig fmt: array literals with comments" {
     try testTransform(
         \\const a = []u8{
         \\    1, 2, //
@@ -1992,33 +2092,45 @@ test "zig fmt: array literal with hint" {
         \\const a = []u8{
         \\    1,
         \\    2,
+        \\    // zig fmt: off
         \\    3, 4, //
         \\    5, 6, //
         \\    7, 8, //
+        \\    // zig fmt: on
         \\};
     ,
         \\const a = []u8{
-        \\    1, 2, //
-        \\    3, 4,
-        \\    5, 6,
+        \\    1,
+        \\    2, //
+        \\    3,
+        \\    4,
+        \\    5,
+        \\    6,
         \\    7,
         \\};
         \\const a = []u8{
-        \\    1, 2, //
-        \\    3, 4,
-        \\    5, 6,
-        \\    7, 8,
+        \\    1,
+        \\    2, //
+        \\    3,
+        \\    4,
+        \\    5,
+        \\    6,
+        \\    7,
+        \\    8,
         \\};
         \\const a = []u8{
-        \\    1, 2, //
-        \\    3, 4,
+        \\    1,
+        \\    2, //
+        \\    3,
+        \\    4,
         \\    5,
         \\    6, // blah
         \\    7,
         \\    8,
         \\};
         \\const a = []u8{
-        \\    1, 2, //
+        \\    1,
+        \\    2, //
         \\    3, //
         \\    4,
         \\    5,
@@ -2028,21 +2140,25 @@ test "zig fmt: array literal with hint" {
         \\const a = []u8{
         \\    1,
         \\    2,
+        \\    // zig fmt: off
         \\    3, 4, //
         \\    5, 6, //
         \\    7, 8, //
+        \\    // zig fmt: on
         \\};
         \\
     );
 }
 
-test "zig fmt: array literal vertical column alignment" {
+test "zig fmt: list value formatting with and without \"zig fmt: off\"" {
     try testTransform(
+        \\    // zig fmt: off
         \\const a = []u8{
         \\    1000, 200,
         \\    30, 4,
         \\    50000, 60,
         \\};
+        \\    // zig fmt: on
         \\const a = []u8{0,   1, 2, 3, 40,
         \\    4,5,600,7,
         \\           80,
@@ -2053,16 +2169,31 @@ test "zig fmt: array literal vertical column alignment" {
         \\    31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31, };
         \\
     ,
+        \\// zig fmt: off
         \\const a = []u8{
-        \\    1000,  200,
-        \\    30,    4,
+        \\    1000, 200,
+        \\    30, 4,
         \\    50000, 60,
         \\};
+        \\    // zig fmt: on
         \\const a = []u8{
-        \\    0,  1,  2,   3, 40,
-        \\    4,  5,  600, 7, 80,
-        \\    9,  10, 11,  0, 13,
-        \\    14, 15,
+        \\    0,
+        \\    1,
+        \\    2,
+        \\    3,
+        \\    40,
+        \\    4,
+        \\    5,
+        \\    600,
+        \\    7,
+        \\    80,
+        \\    9,
+        \\    10,
+        \\    11,
+        \\    0,
+        \\    13,
+        \\    14,
+        \\    15,
         \\};
         \\const a = [12]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
         \\const a = [12]u8{
@@ -2278,7 +2409,11 @@ test "zig fmt: add trailing comma to array literal" {
     ,
         \\comptime {
         \\    return []u16{
-        \\        'm', 's', 'y', 's', '-', // hi
+        \\        'm',
+        \\        's',
+        \\        'y',
+        \\        's',
+        \\        '-', // hi
         \\    };
         \\    return []u16{ 'm', 's', 'y', 's', '-' };
         \\    return []u16{ 'm', 's', 'y', 's', '-' };
@@ -3805,8 +3940,10 @@ test "zig fmt: anon struct/array literal in if" {
     try testCanonical(
         \\test {
         \\    const a = if (cond) .{
-        \\        1, 2,
-        \\        3, 4,
+        \\        1,
+        \\        2,
+        \\        3,
+        \\        4,
         \\    } else .{
         \\        1,
         \\        2,
@@ -4693,16 +4830,18 @@ test "zig fmt: regression test for #8974" {
     );
 }
 
-test "zig fmt: allow trailing line comments to do manual array formatting" {
+test "zig fmt: alignment of values in tuple literals in function" {
     try testCanonical(
         \\fn foo() void {
         \\    self.code.appendSliceAssumeCapacity(&[_]u8{
-        \\        0x55, // push rbp
+        \\        // zig fmt: off
         \\        0x48, 0x89, 0xe5, // mov rbp, rsp
         \\        0x48, 0x81, 0xec, // sub rsp, imm32 (with reloc)
+        \\        // zig fmt: on
         \\    });
         \\
         \\    di_buf.appendAssumeCapacity(&[_]u8{
+        \\        // zig fmt: off
         \\        1, DW.TAG_compile_unit, DW.CHILDREN_no, // header
         \\        DW.AT_stmt_list, DW_FORM_data4, // form value pairs
         \\        DW.AT_low_pc,    DW_FORM_addr,
@@ -4712,17 +4851,23 @@ test "zig fmt: allow trailing line comments to do manual array formatting" {
         \\        DW.AT_producer,  DW_FORM_strp,
         \\        DW.AT_language,  DW_FORM_data2,
         \\        0, 0, // sentinel
+        \\        // zig fmt: on
         \\    });
         \\
         \\    self.code.appendSliceAssumeCapacity(&[_]u8{
         \\        0x55, // push rbp
-        \\        0x48, 0x89, 0xe5, // mov rbp, rsp
+        \\        0x48,
+        \\        0x89,
+        \\        0xe5, // mov rbp, rsp
         \\        // How do we handle this?
         \\        //0x48, 0x81, 0xec, // sub rsp, imm32 (with reloc)
         \\        // Here's a blank line, should that be allowed?
         \\
-        \\        0x48, 0x89, 0xe5,
-        \\        0x33, 0x45,
+        \\        0x48,
+        \\        0x89,
+        \\        0xe5,
+        \\        0x33,
+        \\        0x45,
         \\        // Now the comment breaks a single line -- how do we handle this?
         \\        0x88,
         \\    });
@@ -4738,8 +4883,10 @@ test "zig fmt: multiline string literals should play nice with array initializer
         \\        0,
         \\    }}}}}}}};
         \\    myFunc(.{
+        \\        // zig fmt: off
         \\        "aaaaaaa",                           "bbbbbb", "ccccc",
         \\        "dddd",                              ("eee"),  ("fff"),
+        \\        // zig fmt: on
         \\        ("gggg"),
         \\        // Line comment
         \\        \\Multiline String Literals can be quite long
@@ -4764,7 +4911,8 @@ test "zig fmt: multiline string literals should play nice with array initializer
         \\            \\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         \\        )},
         \\        .{
-        \\            "xxxxxxx", "xxx",
+        \\            "xxxxxxx",
+        \\            "xxx",
         \\            (
         \\                \\ xxx
         \\            ),
@@ -4773,10 +4921,13 @@ test "zig fmt: multiline string literals should play nice with array initializer
         \\        },
         \\        .{ "xxxxxxx", "xxx", "xxx", "xxx" },
         \\        .{ "xxxxxxx", "xxx", "xxx", "xxx" },
+        \\        // zig fmt: off
         \\        "aaaaaaa", "bbbbbb", "ccccc", // -
         \\        "dddd",    ("eee"),  ("fff"),
+        \\        // zig fmt: on
         \\        .{
-        \\            "xxx",            "xxx",
+        \\            "xxx",
+        \\            "xxx",
         \\            (
         \\                \\ xxx
         \\            ),
