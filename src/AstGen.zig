@@ -6992,7 +6992,8 @@ fn switchExpr(
                 const first = try comptimeExpr(parent_gz, scope, item_ri, node_datas[range].lhs);
                 const last = try comptimeExpr(parent_gz, scope, item_ri, node_datas[range].rhs);
                 try payloads.appendSlice(gpa, &[_]u32{
-                    @enumToInt(first), @enumToInt(last),
+                    @enumToInt(first),
+                    @enumToInt(last),
                 });
             }
 
@@ -8038,7 +8039,9 @@ fn builtinCall(
         if (expected != params.len) {
             const s = if (expected == 1) "" else "s";
             return astgen.failNode(node, "expected {d} argument{s}, found {d}", .{
-                expected, s, params.len,
+                expected,
+                s,
+                params.len,
             });
         }
     }
@@ -12585,7 +12588,9 @@ fn detectLocalShadowing(
                 defer gpa.free(name);
                 if (outer_scope) {
                     return astgen.failTokNotes(name_token, "{s} '{s}' shadows {s} from outer scope", .{
-                        @tagName(id_cat), name, @tagName(local_val.id_cat),
+                        @tagName(id_cat),
+                        name,
+                        @tagName(local_val.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
                             local_val.token_src,
@@ -12595,7 +12600,8 @@ fn detectLocalShadowing(
                     });
                 }
                 return astgen.failTokNotes(name_token, "redeclaration of {s} '{s}'", .{
-                    @tagName(local_val.id_cat), name,
+                    @tagName(local_val.id_cat),
+                    name,
                 }, &[_]u32{
                     try astgen.errNoteTok(
                         local_val.token_src,
@@ -12614,7 +12620,9 @@ fn detectLocalShadowing(
                 defer gpa.free(name);
                 if (outer_scope) {
                     return astgen.failTokNotes(name_token, "{s} '{s}' shadows {s} from outer scope", .{
-                        @tagName(id_cat), name, @tagName(local_ptr.id_cat),
+                        @tagName(id_cat),
+                        name,
+                        @tagName(local_ptr.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
                             local_ptr.token_src,
@@ -12624,7 +12632,8 @@ fn detectLocalShadowing(
                     });
                 }
                 return astgen.failTokNotes(name_token, "redeclaration of {s} '{s}'", .{
-                    @tagName(local_ptr.id_cat), name,
+                    @tagName(local_ptr.id_cat),
+                    name,
                 }, &[_]u32{
                     try astgen.errNoteTok(
                         local_ptr.token_src,
@@ -12646,7 +12655,8 @@ fn detectLocalShadowing(
             const name = try gpa.dupe(u8, name_slice);
             defer gpa.free(name);
             return astgen.failTokNotes(name_token, "{s} shadows declaration of '{s}'", .{
-                @tagName(id_cat), name,
+                @tagName(id_cat),
+                name,
             }, &[_]u32{
                 try astgen.errNoteNode(decl_node, "declared here", .{}),
             });
@@ -12781,7 +12791,8 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
                 const local_val = s.cast(Scope.LocalVal).?;
                 if (local_val.name == name_str_index) {
                     return astgen.failTokNotes(name_token, "declaration '{s}' shadows {s} from outer scope", .{
-                        token_bytes, @tagName(local_val.id_cat),
+                        token_bytes,
+                        @tagName(local_val.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
                             local_val.token_src,
@@ -12796,7 +12807,8 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
                 const local_ptr = s.cast(Scope.LocalPtr).?;
                 if (local_ptr.name == name_str_index) {
                     return astgen.failTokNotes(name_token, "declaration '{s}' shadows {s} from outer scope", .{
-                        token_bytes, @tagName(local_ptr.id_cat),
+                        token_bytes,
+                        @tagName(local_ptr.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
                             local_ptr.token_src,

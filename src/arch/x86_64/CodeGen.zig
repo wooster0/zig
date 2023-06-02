@@ -2521,7 +2521,8 @@ fn airFptrunc(self: *Self, inst: Air.Inst.Index) !void {
                 );
             },
             else => return self.fail("TODO implement airFptrunc from {} to {}", .{
-                src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+                src_ty.fmt(self.bin_file.options.module.?),
+                dst_ty.fmt(self.bin_file.options.module.?),
             }),
         }
     } else if (src_bits == 64 and dst_bits == 32) {
@@ -2551,7 +2552,8 @@ fn airFptrunc(self: *Self, inst: Air.Inst.Index) !void {
                 try self.copyToTmpRegister(src_ty, src_mcv)).to128(),
         );
     } else return self.fail("TODO implement airFptrunc from {} to {}", .{
-        src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+        src_ty.fmt(self.bin_file.options.module.?),
+        dst_ty.fmt(self.bin_file.options.module.?),
     });
     return self.finishAir(inst, dst_mcv, .{ ty_op.operand, .none, .none });
 }
@@ -2582,7 +2584,8 @@ fn airFpext(self: *Self, inst: Air.Inst.Index) !void {
             32 => {},
             64 => try self.asmRegisterRegisterRegister(.{ .v_sd, .cvtss2 }, dst_reg, dst_reg, dst_reg),
             else => return self.fail("TODO implement airFpext from {} to {}", .{
-                src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+                src_ty.fmt(self.bin_file.options.module.?),
+                dst_ty.fmt(self.bin_file.options.module.?),
             }),
         }
     } else if (src_bits == 32 and dst_bits == 64) {
@@ -2612,7 +2615,8 @@ fn airFpext(self: *Self, inst: Air.Inst.Index) !void {
                 try self.copyToTmpRegister(src_ty, src_mcv)).to128(),
         );
     } else return self.fail("TODO implement airFpext from {} to {}", .{
-        src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+        src_ty.fmt(self.bin_file.options.module.?),
+        dst_ty.fmt(self.bin_file.options.module.?),
     });
     return self.finishAir(inst, dst_mcv, .{ ty_op.operand, .none, .none });
 }
@@ -6173,7 +6177,8 @@ fn genMulDivBinOp(
         .mul, .mulwrap => dst_abi_size != src_abi_size and dst_abi_size != src_abi_size * 2,
         .div_trunc, .div_floor, .div_exact, .rem, .mod => dst_abi_size != src_abi_size,
     } or src_abi_size > 8) return self.fail("TODO implement genMulDivBinOp from {} to {}", .{
-        src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+        src_ty.fmt(self.bin_file.options.module.?),
+        dst_ty.fmt(self.bin_file.options.module.?),
     });
     const ty = if (dst_abi_size <= 8) dst_ty else src_ty;
     const abi_size = if (dst_abi_size <= 8) dst_abi_size else src_abi_size;
@@ -6574,7 +6579,8 @@ fn genBinOp(
             },
 
             else => return self.fail("TODO implement genBinOp for {s} {}", .{
-                @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                @tagName(air_tag),
+                lhs_ty.fmt(self.bin_file.options.module.?),
             }),
         }
         return dst_mcv;
@@ -7144,7 +7150,8 @@ fn genBinOp(
             },
         },
     })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-        @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+        @tagName(air_tag),
+        lhs_ty.fmt(self.bin_file.options.module.?),
     });
 
     const lhs_copy_reg = if (maybe_mask_reg) |_| registerAlias(
@@ -7199,7 +7206,8 @@ fn genBinOp(
                 else => unreachable,
             },
         ) else return self.fail("TODO implement genBinOp for {s} {} without sse4_1 feature", .{
-            @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+            @tagName(air_tag),
+            lhs_ty.fmt(self.bin_file.options.module.?),
         }),
         .bit_and, .bit_or, .xor => {},
         .max, .min => if (maybe_mask_reg) |mask_reg| if (self.hasFeature(.avx)) {
@@ -7232,7 +7240,8 @@ fn genBinOp(
                     },
                     else => unreachable,
                 })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                    @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                    @tagName(air_tag),
+                    lhs_ty.fmt(self.bin_file.options.module.?),
                 }),
                 mask_reg,
                 rhs_copy_reg,
@@ -7264,7 +7273,8 @@ fn genBinOp(
                     },
                     else => unreachable,
                 })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                    @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                    @tagName(air_tag),
+                    lhs_ty.fmt(self.bin_file.options.module.?),
                 }),
                 dst_reg,
                 dst_reg,
@@ -7300,7 +7310,8 @@ fn genBinOp(
                     },
                     else => unreachable,
                 })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                    @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                    @tagName(air_tag),
+                    lhs_ty.fmt(self.bin_file.options.module.?),
                 }),
                 mask_reg,
                 mask_reg,
@@ -7331,7 +7342,8 @@ fn genBinOp(
                     },
                     else => unreachable,
                 })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                    @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                    @tagName(air_tag),
+                    lhs_ty.fmt(self.bin_file.options.module.?),
                 }),
                 dst_reg,
                 lhs_copy_reg.?,
@@ -7362,7 +7374,8 @@ fn genBinOp(
                         },
                         else => unreachable,
                     })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                        @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                        @tagName(air_tag),
+                        lhs_ty.fmt(self.bin_file.options.module.?),
                     }),
                     dst_reg,
                     mask_reg,
@@ -7392,7 +7405,8 @@ fn genBinOp(
                         },
                         else => unreachable,
                     })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                        @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                        @tagName(air_tag),
+                        lhs_ty.fmt(self.bin_file.options.module.?),
                     }),
                     mask_reg,
                     lhs_copy_reg.?,
@@ -7422,7 +7436,8 @@ fn genBinOp(
                         },
                         else => unreachable,
                     })) |tag| tag else return self.fail("TODO implement genBinOp for {s} {}", .{
-                        @tagName(air_tag), lhs_ty.fmt(self.bin_file.options.module.?),
+                        @tagName(air_tag),
+                        lhs_ty.fmt(self.bin_file.options.module.?),
                     }),
                     dst_reg,
                     mask_reg,
@@ -10248,7 +10263,8 @@ fn airIntToFloat(self: *Self, inst: Air.Inst.Index) !void {
         .unsigned => src_bits + 1,
     }, 32), 8) catch unreachable;
     if (src_size > 8) return self.fail("TODO implement airIntToFloat from {} to {}", .{
-        src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+        src_ty.fmt(self.bin_file.options.module.?),
+        dst_ty.fmt(self.bin_file.options.module.?),
     });
 
     const src_mcv = try self.resolveInst(ty_op.operand);
@@ -10275,7 +10291,8 @@ fn airIntToFloat(self: *Self, inst: Air.Inst.Index) !void {
         },
         else => null,
     })) |tag| tag else return self.fail("TODO implement airIntToFloat from {} to {}", .{
-        src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+        src_ty.fmt(self.bin_file.options.module.?),
+        dst_ty.fmt(self.bin_file.options.module.?),
     });
     const dst_alias = dst_reg.to128();
     const src_alias = registerAlias(src_reg, src_size);
@@ -10301,7 +10318,8 @@ fn airFloatToInt(self: *Self, inst: Air.Inst.Index) !void {
         .unsigned => dst_bits + 1,
     }, 32), 8) catch unreachable;
     if (dst_size > 8) return self.fail("TODO implement airFloatToInt from {} to {}", .{
-        src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+        src_ty.fmt(self.bin_file.options.module.?),
+        dst_ty.fmt(self.bin_file.options.module.?),
     });
 
     const src_mcv = try self.resolveInst(ty_op.operand);
@@ -10327,7 +10345,8 @@ fn airFloatToInt(self: *Self, inst: Air.Inst.Index) !void {
             },
             else => null,
         })) |tag| tag else return self.fail("TODO implement airFloatToInt from {} to {}", .{
-            src_ty.fmt(self.bin_file.options.module.?), dst_ty.fmt(self.bin_file.options.module.?),
+            src_ty.fmt(self.bin_file.options.module.?),
+            dst_ty.fmt(self.bin_file.options.module.?),
         }),
         registerAlias(dst_reg, dst_size),
         src_reg.to128(),
@@ -10642,7 +10661,8 @@ fn atomicOp(
                     try self.asmRegisterMemory(.{ ._, .xor }, .rcx, val_hi_mem);
                 },
                 else => return self.fail("TODO implement x86 atomic loop for {} {s}", .{
-                    val_ty.fmt(self.bin_file.options.module.?), @tagName(op),
+                    val_ty.fmt(self.bin_file.options.module.?),
+                    @tagName(op),
                 }),
             };
             try self.asmMemory(.{ .@"lock _16b", .cmpxchg }, ptr_mem);

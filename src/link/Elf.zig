@@ -1705,7 +1705,8 @@ fn linkWithLLD(self: *Elf, comp: *Compilation, prog_node: *std.Progress.Node) !v
                     test_path.clearRetainingCapacity();
                     const sep = fs.path.sep_str;
                     try test_path.writer().print("{s}" ++ sep ++ "lib{s}.so", .{
-                        lib_dir_path, link_lib,
+                        lib_dir_path,
+                        link_lib,
                     });
                     fs.cwd().access(test_path.items, .{}) catch |err| switch (err) {
                         error.FileNotFound => continue,
@@ -1872,7 +1873,10 @@ fn linkWithLLD(self: *Elf, comp: *Compilation, prog_node: *std.Progress.Node) !v
                 } else if (target.isGnuLibC()) {
                     for (glibc.libs) |lib| {
                         const lib_path = try std.fmt.allocPrint(arena, "{s}{c}lib{s}.so.{d}", .{
-                            comp.glibc_so_files.?.dir_path, fs.path.sep, lib.name, lib.sover,
+                            comp.glibc_so_files.?.dir_path,
+                            fs.path.sep,
+                            lib.name,
+                            lib.sover,
                         });
                         try argv.append(lib_path);
                     }

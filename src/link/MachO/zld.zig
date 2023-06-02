@@ -387,7 +387,9 @@ pub const Zld = struct {
         const res: ?u8 = blk: {
             if (mem.eql(u8, "__LLVM", segname)) {
                 log.debug("TODO LLVM section: type 0x{x}, name '{s},{s}'", .{
-                    sect.flags, segname, sectname,
+                    sect.flags,
+                    segname,
+                    sectname,
                 });
                 break :blk null;
             }
@@ -813,7 +815,9 @@ pub const Zld = struct {
             if (sym.n_desc == N_DEAD) continue;
 
             log.debug("creating tentative definition for ATOM(%{d}, '{s}') in object({?})", .{
-                global.sym_index, self.getSymbolName(global), global.file,
+                global.sym_index,
+                self.getSymbolName(global),
+                global.file,
             });
 
             // Convert any tentative definition into a regular symbol and allocate

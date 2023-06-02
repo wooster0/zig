@@ -1445,7 +1445,8 @@ fn buildOutputType(
                         const style = arg["--build-id=".len..];
                         build_id = BuildId.parse(style) catch |err| {
                             fatal("unable to parse --build-id style '{s}': {s}", .{
-                                style, @errorName(err),
+                                style,
+                                @errorName(err),
                             });
                         };
                     } else if (mem.eql(u8, arg, "--debug-compile-errors")) {
@@ -1690,7 +1691,8 @@ fn buildOutputType(
                                     if (mem.eql(u8, key, "--build-id")) {
                                         build_id = BuildId.parse(value) catch |err| {
                                             fatal("unable to parse --build-id style '{s}': {s}", .{
-                                                value, @errorName(err),
+                                                value,
+                                                @errorName(err),
                                             });
                                         };
                                         continue;
@@ -2381,7 +2383,8 @@ fn buildOutputType(
                     const llvm_name = llvm_m_arg["mno-".len..];
                     const zig_name = llvm_to_zig_name.get(llvm_name) orelse {
                         fatal("target architecture {s} has no LLVM CPU feature named '{s}'", .{
-                            @tagName(cpu_arch), llvm_name,
+                            @tagName(cpu_arch),
+                            llvm_name,
                         });
                     };
                     try mcpu_buffer.append('-');
@@ -2390,7 +2393,8 @@ fn buildOutputType(
                     const llvm_name = llvm_m_arg["m".len..];
                     const zig_name = llvm_to_zig_name.get(llvm_name) orelse {
                         fatal("target architecture {s} has no LLVM CPU feature named '{s}'", .{
-                            @tagName(cpu_arch), llvm_name,
+                            @tagName(cpu_arch),
+                            llvm_name,
                         });
                     };
                     try mcpu_buffer.append('+');
@@ -2490,7 +2494,8 @@ fn buildOutputType(
                 fs.cwd().access(test_path.items, .{}) catch |err| switch (err) {
                     error.FileNotFound => continue,
                     else => |e| fatal("unable to search for static library '{s}': {s}", .{
-                        test_path.items, @errorName(e),
+                        test_path.items,
+                        @errorName(e),
                     }),
                 };
                 try link_objects.append(.{ .path = try arena.dupe(u8, test_path.items) });
@@ -2503,12 +2508,14 @@ fn buildOutputType(
                 for (lib_dirs.items) |lib_dir_path| {
                     test_path.clearRetainingCapacity();
                     try test_path.writer().print("{s}" ++ sep ++ "lib{s}.a", .{
-                        lib_dir_path, lib_name,
+                        lib_dir_path,
+                        lib_name,
                     });
                     fs.cwd().access(test_path.items, .{}) catch |err| switch (err) {
                         error.FileNotFound => continue,
                         else => |e| fatal("unable to search for static library '{s}': {s}", .{
-                            test_path.items, @errorName(e),
+                            test_path.items,
+                            @errorName(e),
                         }),
                     };
                     try link_objects.append(.{ .path = try arena.dupe(u8, test_path.items) });
@@ -2610,7 +2617,8 @@ fn buildOutputType(
                 fs.cwd().access(test_path.items, .{}) catch |err| switch (err) {
                     error.FileNotFound => continue,
                     else => |e| fatal("unable to search for static library '{s}': {s}", .{
-                        test_path.items, @errorName(e),
+                        test_path.items,
+                        @errorName(e),
                     }),
                 };
                 try link_objects.append(.{ .path = try arena.dupe(u8, test_path.items) });
@@ -2627,7 +2635,8 @@ fn buildOutputType(
                 }
                 try search_paths.appendSlice("\n suggestion: use full paths to static libraries on the command line rather than using -l and -L arguments");
                 fatal("static library '{s}' not found. search paths: {s}", .{
-                    static_lib, search_paths.items,
+                    static_lib,
+                    search_paths.items,
                 });
             }
         }
@@ -2722,12 +2731,14 @@ fn buildOutputType(
         switch (emit_h) {
             .yes => |p| {
                 fatal("unable to open directory from argument '-femit-h', '{s}': {s}", .{
-                    p, @errorName(err),
+                    p,
+                    @errorName(err),
                 });
             },
             .yes_default_path => {
                 fatal("unable to open directory from arguments '--name' or '-fsoname', '{s}': {s}", .{
-                    default_h_basename, @errorName(err),
+                    default_h_basename,
+                    @errorName(err),
                 });
             },
             .no => unreachable,
@@ -2740,12 +2751,14 @@ fn buildOutputType(
         switch (emit_asm) {
             .yes => |p| {
                 fatal("unable to open directory from argument '-femit-asm', '{s}': {s}", .{
-                    p, @errorName(err),
+                    p,
+                    @errorName(err),
                 });
             },
             .yes_default_path => {
                 fatal("unable to open directory from arguments '--name' or '-fsoname', '{s}': {s}", .{
-                    default_asm_basename, @errorName(err),
+                    default_asm_basename,
+                    @errorName(err),
                 });
             },
             .no => unreachable,
@@ -2758,12 +2771,14 @@ fn buildOutputType(
         switch (emit_llvm_ir) {
             .yes => |p| {
                 fatal("unable to open directory from argument '-femit-llvm-ir', '{s}': {s}", .{
-                    p, @errorName(err),
+                    p,
+                    @errorName(err),
                 });
             },
             .yes_default_path => {
                 fatal("unable to open directory from arguments '--name' or '-fsoname', '{s}': {s}", .{
-                    default_llvm_ir_basename, @errorName(err),
+                    default_llvm_ir_basename,
+                    @errorName(err),
                 });
             },
             .no => unreachable,
@@ -2776,12 +2791,14 @@ fn buildOutputType(
         switch (emit_llvm_bc) {
             .yes => |p| {
                 fatal("unable to open directory from argument '-femit-llvm-bc', '{s}': {s}", .{
-                    p, @errorName(err),
+                    p,
+                    @errorName(err),
                 });
             },
             .yes_default_path => {
                 fatal("unable to open directory from arguments '--name' or '-fsoname', '{s}': {s}", .{
-                    default_llvm_bc_basename, @errorName(err),
+                    default_llvm_bc_basename,
+                    @errorName(err),
                 });
             },
             .no => unreachable,
@@ -2794,12 +2811,14 @@ fn buildOutputType(
         switch (emit_analysis) {
             .yes => |p| {
                 fatal("unable to open directory from argument '-femit-analysis',  '{s}': {s}", .{
-                    p, @errorName(err),
+                    p,
+                    @errorName(err),
                 });
             },
             .yes_default_path => {
                 fatal("unable to open directory from arguments 'name' or 'soname', '{s}': {s}", .{
-                    default_analysis_basename, @errorName(err),
+                    default_analysis_basename,
+                    @errorName(err),
                 });
             },
             .no => unreachable,
@@ -2811,7 +2830,8 @@ fn buildOutputType(
         switch (emit_docs) {
             .yes => |p| {
                 fatal("unable to open directory from argument '-femit-docs', '{s}': {s}", .{
-                    p, @errorName(err),
+                    p,
+                    @errorName(err),
                 });
             },
             .yes_default_path => {
@@ -2843,7 +2863,8 @@ fn buildOutputType(
         .no => Emit.Resolved{ .data = null, .dir = null },
         .yes => |p| emit_implib.resolve(default_implib_basename) catch |err| {
             fatal("unable to open directory from argument '-femit-implib', '{s}': {s}", .{
-                p, @errorName(err),
+                p,
+                @errorName(err),
             });
         },
         .yes_default_path => Emit.Resolved{
@@ -3013,7 +3034,8 @@ fn buildOutputType(
         // "-" is stdin. Dump it to a real file.
         const sep = fs.path.sep_str;
         const sub_path = try std.fmt.allocPrint(arena, "tmp" ++ sep ++ "{x}-stdin{s}", .{
-            std.crypto.random.int(u64), ext.canonicalName(target_info.target),
+            std.crypto.random.int(u64),
+            ext.canonicalName(target_info.target),
         });
         try local_cache_directory.handle.makePath("tmp");
         // Note that in one of the happy paths, execve() is used to switch
@@ -3198,11 +3220,16 @@ fn buildOutputType(
                 if (t.arch == target.cpu.arch and t.os == target.os.tag) {
                     if (t.os_ver) |os_ver| {
                         std.log.info("zig can provide libc for related target {s}-{s}.{d}-{s}", .{
-                            @tagName(t.arch), @tagName(t.os), os_ver.major, @tagName(t.abi),
+                            @tagName(t.arch),
+                            @tagName(t.os),
+                            os_ver.major,
+                            @tagName(t.abi),
                         });
                     } else {
                         std.log.info("zig can provide libc for related target {s}-{s}-{s}", .{
-                            @tagName(t.arch), @tagName(t.os), @tagName(t.abi),
+                            @tagName(t.arch),
+                            @tagName(t.os),
+                            @tagName(t.abi),
                         });
                     }
                 }
@@ -3279,7 +3306,8 @@ fn buildOutputType(
         const c_code_loc = emit_bin_loc orelse break :default_exec_args;
         const c_code_directory = c_code_loc.directory orelse comp.bin_file.options.emit.?.directory;
         const c_code_path = try fs.path.join(arena, &[_][]const u8{
-            c_code_directory.path orelse ".", c_code_loc.basename,
+            c_code_directory.path orelse ".",
+            c_code_loc.basename,
         });
         try test_exec_args.append(self_exe_path);
         try test_exec_args.append("run");
@@ -3291,8 +3319,10 @@ fn buildOutputType(
             try test_exec_args.append("-lc");
         } else if (target_info.target.os.tag == .windows) {
             try test_exec_args.appendSlice(&.{
-                "--subsystem", "console",
-                "-lkernel32",  "-lntdll",
+                "--subsystem",
+                "console",
+                "-lkernel32",
+                "-lntdll",
             });
         }
 
@@ -3403,7 +3433,9 @@ fn serve(
                     var reset: std.Thread.ResetEvent = .{};
 
                     var progress_thread = try std.Thread.spawn(.{}, progressThread, .{
-                        &progress, &server, &reset,
+                        &progress,
+                        &server,
+                        &reset,
                     });
                     defer {
                         reset.set();
@@ -3584,7 +3616,8 @@ fn parseCrossTargetOrReportFatalError(
                     help_text.writer().print(" {s}\n", .{cpu.name}) catch break :help;
                 }
                 std.log.info("available CPUs for architecture '{s}':\n{s}", .{
-                    @tagName(diags.arch.?), help_text.items,
+                    @tagName(diags.arch.?),
+                    help_text.items,
                 });
             }
             fatal("unknown CPU: '{s}'", .{diags.cpu_name.?});
@@ -3597,7 +3630,8 @@ fn parseCrossTargetOrReportFatalError(
                     help_text.writer().print(" {s}: {s}\n", .{ feature.name, feature.description }) catch break :help;
                 }
                 std.log.info("available CPU features for architecture '{s}':\n{s}", .{
-                    @tagName(diags.arch.?), help_text.items,
+                    @tagName(diags.arch.?),
+                    help_text.items,
                 });
             }
             fatal("unknown CPU feature: '{s}'", .{diags.unknown_feature_name.?});
@@ -3634,7 +3668,8 @@ fn runOrTest(
     // A naive `directory.join` here will indeed get the correct path to the binary,
     // however, in the case of cwd, we actually want `./foo` so that the path can be executed.
     const exe_path = try fs.path.join(arena, &[_][]const u8{
-        exe_emit.directory.path orelse ".", exe_emit.sub_path,
+        exe_emit.directory.path orelse ".",
+        exe_emit.sub_path,
     });
 
     var argv = std.ArrayList([]const u8).init(gpa);
@@ -3736,14 +3771,16 @@ fn runOrTestHotSwap(
         .windows => blk: {
             try exe_emit.directory.handle.copyFile(exe_emit.sub_path, comp.local_cache_directory.handle, exe_emit.sub_path, .{});
             break :blk try fs.path.join(gpa, &[_][]const u8{
-                comp.local_cache_directory.path orelse ".", exe_emit.sub_path,
+                comp.local_cache_directory.path orelse ".",
+                exe_emit.sub_path,
             });
         },
 
         // A naive `directory.join` here will indeed get the correct path to the binary,
         // however, in the case of cwd, we actually want `./foo` so that the path can be executed.
         else => try fs.path.join(gpa, &[_][]const u8{
-            exe_emit.directory.path orelse ".", exe_emit.sub_path,
+            exe_emit.directory.path orelse ".",
+            exe_emit.sub_path,
         }),
     };
     defer gpa.free(exe_path);
@@ -3755,7 +3792,8 @@ fn runOrTestHotSwap(
         // when testing pass the zig_exe_path to argv
         if (arg_mode == .zig_test)
             try argv.appendSlice(&[_][]const u8{
-                exe_path, self_exe_path,
+                exe_path,
+                self_exe_path,
             })
             // when running just pass the current exe
         else
@@ -3768,7 +3806,8 @@ fn runOrTestHotSwap(
                 try argv.append(a);
             } else {
                 try argv.appendSlice(&[_][]const u8{
-                    exe_path, self_exe_path,
+                    exe_path,
+                    self_exe_path,
                 });
             }
         }
@@ -3967,7 +4006,9 @@ fn cmdTranslateC(comp: *Compilation, arena: Allocator, fancy_output: ?*Translate
 
     if (fancy_output) |p| {
         const full_zig_path = try comp.local_cache_directory.join(arena, &[_][]const u8{
-            "o", &digest, translated_zig_basename,
+            "o",
+            &digest,
+            translated_zig_basename,
         });
         p.path = full_zig_path;
     } else {
@@ -5770,7 +5811,8 @@ pub fn cmdChangelist(
         var it = inst_map.iterator();
         while (it.next()) |entry| {
             try stdout.print(" %{d} => %{d}\n", .{
-                entry.key_ptr.*, entry.value_ptr.*,
+                entry.key_ptr.*,
+                entry.value_ptr.*,
             });
         }
     }
@@ -5779,7 +5821,8 @@ pub fn cmdChangelist(
         var it = extra_map.iterator();
         while (it.next()) |entry| {
             try stdout.print(" {d} => {d}\n", .{
-                entry.key_ptr.*, entry.value_ptr.*,
+                entry.key_ptr.*,
+                entry.value_ptr.*,
             });
         }
     }
@@ -5819,7 +5862,8 @@ fn warnAboutForeignBinaries(
             const host_name = try host_target_info.target.zigTriple(arena);
             const foreign_name = try target_info.target.zigTriple(arena);
             warn("the host system ({s}) does not appear to be capable of executing binaries from the target ({s}). Consider installing Rosetta.", .{
-                host_name, foreign_name,
+                host_name,
+                foreign_name,
             });
         },
         .qemu => |qemu| {
@@ -5897,7 +5941,9 @@ fn warnAboutForeignBinaries(
                 else => "",
             };
             warn("the host system does not appear to be capable of executing binaries from the target because the host dynamic linker is '{s}', while the target dynamic linker is '{s}'. Consider using '--dynamic-linker'{s}", .{
-                host_dl, foreign_dl, tip_suffix,
+                host_dl,
+                foreign_dl,
+                tip_suffix,
             });
         },
         .bad_os_or_cpu => {
@@ -5908,7 +5954,9 @@ fn warnAboutForeignBinaries(
                 else => "",
             };
             warn("the host system ({s}) does not appear to be capable of executing binaries from the target ({s}){s}", .{
-                host_name, foreign_name, tip_suffix,
+                host_name,
+                foreign_name,
+                tip_suffix,
             });
         },
     }

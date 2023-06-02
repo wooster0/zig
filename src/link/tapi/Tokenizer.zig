@@ -322,7 +322,10 @@ test "empty doc with explicit markers" {
         \\---
         \\...
     , &[_]Token.Id{
-        .doc_start, .new_line, .doc_end, .eof,
+        .doc_start,
+        .new_line,
+        .doc_end,
+        .eof,
     });
 }
 

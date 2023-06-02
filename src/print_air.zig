@@ -485,7 +485,8 @@ const Writer = struct {
         try s.writeAll(", ");
         try w.writeOperand(s, inst, 2, extra.new_value);
         try s.print(", {s}, {s}", .{
-            @tagName(extra.successOrder()), @tagName(extra.failureOrder()),
+            @tagName(extra.successOrder()),
+            @tagName(extra.failureOrder()),
         });
     }
 
@@ -570,7 +571,9 @@ const Writer = struct {
 
         try w.writeOperand(s, inst, 0, prefetch.ptr);
         try s.print(", {s}, {d}, {s}", .{
-            @tagName(prefetch.rw), prefetch.locality, @tagName(prefetch.cache),
+            @tagName(prefetch.rw),
+            prefetch.locality,
+            @tagName(prefetch.cache),
         });
     }
 

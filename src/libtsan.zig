@@ -98,7 +98,8 @@ pub fn buildTsan(comp: *Compilation, prog_node: *std.Progress.Node) !void {
 
     try c_source_files.ensureUnusedCapacity(sanitizer_common_sources.len);
     const sanitizer_common_include_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-        "tsan", "sanitizer_common",
+        "tsan",
+        "sanitizer_common",
     });
     for (sanitizer_common_sources) |common_src| {
         var cflags = std.ArrayList([]const u8).init(arena);
@@ -113,7 +114,9 @@ pub fn buildTsan(comp: *Compilation, prog_node: *std.Progress.Node) !void {
 
         c_source_files.appendAssumeCapacity(.{
             .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                "tsan", "sanitizer_common", common_src,
+                "tsan",
+                "sanitizer_common",
+                common_src,
             }),
             .extra_flags = cflags.items,
         });
@@ -137,7 +140,9 @@ pub fn buildTsan(comp: *Compilation, prog_node: *std.Progress.Node) !void {
 
         c_source_files.appendAssumeCapacity(.{
             .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                "tsan", "sanitizer_common", c_src,
+                "tsan",
+                "sanitizer_common",
+                c_src,
             }),
             .extra_flags = cflags.items,
         });
@@ -157,7 +162,9 @@ pub fn buildTsan(comp: *Compilation, prog_node: *std.Progress.Node) !void {
 
         c_source_files.appendAssumeCapacity(.{
             .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                "tsan", "sanitizer_common", c_src,
+                "tsan",
+                "sanitizer_common",
+                c_src,
             }),
             .extra_flags = cflags.items,
         });
@@ -185,7 +192,9 @@ pub fn buildTsan(comp: *Compilation, prog_node: *std.Progress.Node) !void {
 
         c_source_files.appendAssumeCapacity(.{
             .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                "tsan", "interception", c_src,
+                "tsan",
+                "interception",
+                c_src,
             }),
             .extra_flags = cflags.items,
         });

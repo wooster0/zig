@@ -1089,7 +1089,8 @@ pub const Struct = struct {
         const tree = file.getTree(mod.gpa) catch |err| {
             // In this case we emit a warning + a less precise source location.
             log.warn("unable to load {s}: {s}", .{
-                file.sub_file_path, @errorName(err),
+                file.sub_file_path,
+                @errorName(err),
             });
             return s.srcLoc(mod);
         };
@@ -1268,7 +1269,8 @@ pub const EnumFull = struct {
         const tree = file.getTree(mod.gpa) catch |err| {
             // In this case we emit a warning + a less precise source location.
             log.warn("unable to load {s}: {s}", .{
-                file.sub_file_path, @errorName(err),
+                file.sub_file_path,
+                @errorName(err),
             });
             return e.srcLoc(mod);
         };
@@ -1354,7 +1356,8 @@ pub const Union = struct {
         const tree = file.getTree(mod.gpa) catch |err| {
             // In this case we emit a warning + a less precise source location.
             log.warn("unable to load {s}: {s}", .{
-                file.sub_file_path, @errorName(err),
+                file.sub_file_path,
+                @errorName(err),
             });
             return u.srcLoc(mod);
         };
@@ -2073,7 +2076,8 @@ pub const File = struct {
 
         const root_dir_path = file.pkg.root_src_directory.path orelse ".";
         log.debug("File.getSource, not cached. pkgdir={s} sub_file_path={s}", .{
-            root_dir_path, file.sub_file_path,
+            root_dir_path,
+            file.sub_file_path,
         });
 
         // Keep track of inode, file size, mtime, hash so we can detect which files
@@ -3619,7 +3623,9 @@ pub fn astGenFile(mod: *Module, file: *File) !void {
         .never_loaded, .retryable_failure => lock: {
             // First, load the cached ZIR code, if any.
             log.debug("AstGen checking cache: {s} (local={}, digest={s})", .{
-                file.sub_file_path, want_local_cache, &digest,
+                file.sub_file_path,
+                want_local_cache,
+                &digest,
             });
 
             break :lock .shared;
@@ -3686,7 +3692,8 @@ pub fn astGenFile(mod: *Module, file: *File) !void {
                 break :update;
             }
             log.debug("AstGen cache hit: {s} instructions_len={d}", .{
-                file.sub_file_path, header.instructions_len,
+                file.sub_file_path,
+                header.instructions_len,
             });
 
             file.zir = loadZirCacheBody(gpa, header, cache_file) catch |err| switch (err) {
@@ -3834,7 +3841,11 @@ pub fn astGenFile(mod: *Module, file: *File) !void {
         const pkg_path = file.pkg.root_src_directory.path orelse ".";
         const cache_path = cache_directory.path orelse ".";
         log.warn("unable to write cached ZIR code for {s}/{s} to {s}/{s}: {s}", .{
-            pkg_path, file.sub_file_path, cache_path, &digest, @errorName(err),
+            pkg_path,
+            file.sub_file_path,
+            cache_path,
+            &digest,
+            @errorName(err),
         });
     };
 
@@ -3991,7 +4002,9 @@ fn updateZirRefs(mod: *Module, file: *File, old_zir: Zir) !void {
             const old_zir_decl_index = decl.zir_decl_index;
             const new_zir_decl_index = extra_map.get(old_zir_decl_index) orelse {
                 log.debug("updateZirRefs {s}: delete {*} ({s})", .{
-                    file.sub_file_path, decl, decl.name,
+                    file.sub_file_path,
+                    decl,
+                    decl.name,
                 });
                 try file.deleted_decls.append(gpa, decl_index);
                 continue;
@@ -4001,12 +4014,20 @@ fn updateZirRefs(mod: *Module, file: *File, old_zir: Zir) !void {
             const new_hash = decl.contentsHashZir(new_zir);
             if (!std.zig.srcHashEql(old_hash, new_hash)) {
                 log.debug("updateZirRefs {s}: outdated {*} ({s}) {d} => {d}", .{
-                    file.sub_file_path, decl, decl.name, old_zir_decl_index, new_zir_decl_index,
+                    file.sub_file_path,
+                    decl,
+                    decl.name,
+                    old_zir_decl_index,
+                    new_zir_decl_index,
                 });
                 try file.outdated_decls.append(gpa, decl_index);
             } else {
                 log.debug("updateZirRefs {s}: unchanged {*} ({s}) {d} => {d}", .{
-                    file.sub_file_path, decl, decl.name, old_zir_decl_index, new_zir_decl_index,
+                    file.sub_file_path,
+                    decl,
+                    decl.name,
+                    old_zir_decl_index,
+                    new_zir_decl_index,
                 });
             }
         }
@@ -4224,7 +4245,10 @@ pub fn ensureDeclAnalyzed(mod: *Module, decl_index: Decl.Index) SemaError!void {
                 dep.removeDependant(decl_index);
                 if (dep.dependants.count() == 0 and !dep.deletion_flag) {
                     log.debug("insert {*} ({s}) dependant {*} ({s}) into deletion set", .{
-                        decl, decl.name, dep, dep.name,
+                        decl,
+                        decl.name,
+                        dep,
+                        dep.name,
                     });
                     try mod.markDeclForDeletion(dep_index);
                 }
@@ -4931,7 +4955,10 @@ pub fn declareDeclDependencyType(mod: *Module, depender_index: Decl.Index, depen
     }
 
     log.debug("{*} ({s}) depends on {*} ({s})", .{
-        depender, depender.name, dependee, dependee.name,
+        depender,
+        depender.name,
+        dependee,
+        dependee.name,
     });
 
     if (dependee.deletion_flag) {
@@ -4959,7 +4986,8 @@ pub fn importPkg(mod: *Module, pkg: *Package) !ImportFileResult {
     // an import refers to the same as another, despite different relative paths
     // or differently mapped package names.
     const resolved_path = try std.fs.path.resolve(gpa, &[_][]const u8{
-        pkg.root_src_directory.path orelse ".", pkg.root_src_path,
+        pkg.root_src_directory.path orelse ".",
+        pkg.root_src_path,
     });
     var keep_resolved_path = false;
     defer if (!keep_resolved_path) gpa.free(resolved_path);
@@ -5031,7 +5059,10 @@ pub fn importFile(
     // or differently mapped package names.
     const cur_pkg_dir_path = cur_file.pkg.root_src_directory.path orelse ".";
     const resolved_path = try std.fs.path.resolve(gpa, &[_][]const u8{
-        cur_pkg_dir_path, cur_file.sub_file_path, "..", import_string,
+        cur_pkg_dir_path,
+        cur_file.sub_file_path,
+        "..",
+        import_string,
     });
     var keep_resolved_path = false;
     defer if (!keep_resolved_path) gpa.free(resolved_path);
@@ -5066,7 +5097,10 @@ pub fn importFile(
     errdefer gpa.free(sub_file_path);
 
     log.debug("new importFile. resolved_root_path={s}, resolved_path={s}, sub_file_path={s}, import_string={s}", .{
-        resolved_root_path, resolved_path, sub_file_path, import_string,
+        resolved_root_path,
+        resolved_path,
+        sub_file_path,
+        import_string,
     });
 
     keep_resolved_path = true; // It's now owned by import_table.
@@ -5096,7 +5130,8 @@ pub fn embedFile(mod: *Module, cur_file: *File, import_string: []const u8) !*Emb
 
     if (cur_file.pkg.table.get(import_string)) |pkg| {
         const resolved_path = try std.fs.path.resolve(gpa, &[_][]const u8{
-            pkg.root_src_directory.path orelse ".", pkg.root_src_path,
+            pkg.root_src_directory.path orelse ".",
+            pkg.root_src_path,
         });
         var keep_resolved_path = false;
         defer if (!keep_resolved_path) gpa.free(resolved_path);
@@ -5115,7 +5150,10 @@ pub fn embedFile(mod: *Module, cur_file: *File, import_string: []const u8) !*Emb
     // refers to the same as another, despite different relative paths.
     const cur_pkg_dir_path = cur_file.pkg.root_src_directory.path orelse ".";
     const resolved_path = try std.fs.path.resolve(gpa, &[_][]const u8{
-        cur_pkg_dir_path, cur_file.sub_file_path, "..", import_string,
+        cur_pkg_dir_path,
+        cur_file.sub_file_path,
+        "..",
+        import_string,
     });
     var keep_resolved_path = false;
     defer if (!keep_resolved_path) gpa.free(resolved_path);
@@ -5474,7 +5512,10 @@ pub fn clearDecl(
         dep.removeDependant(decl_index);
         if (dep.dependants.count() == 0 and !dep.deletion_flag) {
             log.debug("insert {*} ({s}) dependant {*} ({s}) into deletion set", .{
-                decl, decl.name, dep, dep.name,
+                decl,
+                decl.name,
+                dep,
+                dep.name,
             });
             // We don't recursively perform a deletion here, because during the update,
             // another reference to it may turn up.
@@ -5960,7 +6001,8 @@ pub fn createAnonymousDeclFromDecl(
     const new_decl_index = try mod.allocateNewDecl(namespace, src_decl.src_node, src_scope);
     errdefer mod.destroyDecl(new_decl_index);
     const name = try std.fmt.allocPrintZ(mod.gpa, "{s}__anon_{d}", .{
-        src_decl.name, @enumToInt(new_decl_index),
+        src_decl.name,
+        @enumToInt(new_decl_index),
     });
     try mod.initNewAnonDecl(new_decl_index, src_decl.src_line, namespace, tv, name);
     return new_decl_index;
@@ -6082,7 +6124,8 @@ pub const SwitchProngSrc = union(enum) {
         const tree = decl.getFileScope().getTree(gpa) catch |err| {
             // In this case we emit a warning + a less precise source location.
             log.warn("unable to load {s}: {s}", .{
-                decl.getFileScope().sub_file_path, @errorName(err),
+                decl.getFileScope().sub_file_path,
+                @errorName(err),
             });
             return LazySrcLoc.nodeOffset(0);
         };
@@ -6195,7 +6238,8 @@ pub const PeerTypeCandidateSrc = union(enum) {
                 const tree = decl.getFileScope().getTree(gpa) catch |err| {
                     // In this case we emit a warning + a less precise source location.
                     log.warn("unable to load {s}: {s}", .{
-                        decl.getFileScope().sub_file_path, @errorName(err),
+                        decl.getFileScope().sub_file_path,
+                        @errorName(err),
                     });
                     return LazySrcLoc.nodeOffset(0);
                 };
@@ -6262,7 +6306,8 @@ pub fn paramSrc(
     const tree = decl.getFileScope().getTree(gpa) catch |err| {
         // In this case we emit a warning + a less precise source location.
         log.warn("unable to load {s}: {s}", .{
-            decl.getFileScope().sub_file_path, @errorName(err),
+            decl.getFileScope().sub_file_path,
+            @errorName(err),
         });
         return LazySrcLoc.nodeOffset(0);
     };
@@ -6296,7 +6341,8 @@ pub fn argSrc(
     const tree = decl.getFileScope().getTree(gpa) catch |err| {
         // In this case we emit a warning + a less precise source location.
         log.warn("unable to load {s}: {s}", .{
-            decl.getFileScope().sub_file_path, @errorName(err),
+            decl.getFileScope().sub_file_path,
+            @errorName(err),
         });
         return LazySrcLoc.nodeOffset(0);
     };
@@ -6327,7 +6373,8 @@ pub fn initSrc(
     const tree = decl.getFileScope().getTree(gpa) catch |err| {
         // In this case we emit a warning + a less precise source location.
         log.warn("unable to load {s}: {s}", .{
-            decl.getFileScope().sub_file_path, @errorName(err),
+            decl.getFileScope().sub_file_path,
+            @errorName(err),
         });
         return LazySrcLoc.nodeOffset(0);
     };
@@ -6368,7 +6415,8 @@ pub fn optionsSrc(gpa: Allocator, decl: *Decl, base_src: LazySrcLoc, wanted: []c
     const tree = decl.getFileScope().getTree(gpa) catch |err| {
         // In this case we emit a warning + a less precise source location.
         log.warn("unable to load {s}: {s}", .{
-            decl.getFileScope().sub_file_path, @errorName(err),
+            decl.getFileScope().sub_file_path,
+            @errorName(err),
         });
         return LazySrcLoc.nodeOffset(0);
     };

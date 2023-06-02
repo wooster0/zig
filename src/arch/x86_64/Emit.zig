@@ -136,7 +136,8 @@ pub fn emitMir(emit: *Emit) Error!void {
                             .dwarf => |dw| {
                                 try dw.setPrologueEnd();
                                 log.debug("mirDbgPrologueEnd (line={d}, col={d})", .{
-                                    emit.prev_di_line, emit.prev_di_column,
+                                    emit.prev_di_line,
+                                    emit.prev_di_column,
                                 });
                                 try emit.dbgAdvancePCAndLine(emit.prev_di_line, emit.prev_di_column);
                             },
@@ -153,7 +154,8 @@ pub fn emitMir(emit: *Emit) Error!void {
                             .dwarf => |dw| {
                                 try dw.setEpilogueBegin();
                                 log.debug("mirDbgEpilogueBegin (line={d}, col={d})", .{
-                                    emit.prev_di_line, emit.prev_di_column,
+                                    emit.prev_di_line,
+                                    emit.prev_di_column,
                                 });
                                 try emit.dbgAdvancePCAndLine(emit.prev_di_line, emit.prev_di_column);
                             },

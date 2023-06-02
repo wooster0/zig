@@ -418,11 +418,13 @@ fn writeEscaped(out: anytype, input: []const u8) !void {
 }
 
 const builtin_types = [_][]const u8{
+    // zig fmt: off
     "f16",          "f32",     "f64",        "f80",          "f128",
     "c_longdouble", "c_short", "c_ushort",   "c_int",        "c_uint",
     "c_long",       "c_ulong", "c_longlong", "c_ulonglong",  "c_char",
     "anyopaque",    "void",    "bool",       "isize",        "usize",
     "noreturn",     "type",    "anyerror",   "comptime_int", "comptime_float",
+    // zig fmt: on
 };
 
 fn isType(name: []const u8) bool {

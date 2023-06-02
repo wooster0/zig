@@ -369,7 +369,8 @@ pub fn openPath(allocator: Allocator, sub_path: []const u8, options: link.Option
         // we also want to put the intermediary object file in the cache while the
         // main emit directory is the cwd.
         wasm_bin.base.intermediary_basename = try std.fmt.allocPrint(allocator, "{s}{s}", .{
-            options.emit.?.sub_path, options.target.ofmt.fileExt(options.target.cpu.arch),
+            options.emit.?.sub_path,
+            options.target.ofmt.fileExt(options.target.cpu.arch),
         });
     }
 

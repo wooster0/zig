@@ -2445,7 +2445,8 @@ pub fn genErrDecls(o: *Object) !void {
         const len_val = Value.initPayload(&len_pl.base);
 
         try writer.print("{{" ++ name_prefix ++ "{}, {}}}", .{
-            fmtIdent(name), try o.dg.fmtIntLiteral(Type.usize, len_val, .Other),
+            fmtIdent(name),
+            try o.dg.fmtIntLiteral(Type.usize, len_val, .Other),
         });
     }
     try writer.writeAll("};\n");
@@ -2517,7 +2518,8 @@ pub fn genLazyFn(o: *Object, lazy_fn: LazyFnMap.Entry) !void {
                 try w.writeAll(";\n   return (");
                 try o.dg.renderType(w, name_slice_ty);
                 try w.print("){{{}, {}}};\n", .{
-                    fmtIdent("name"), try o.dg.fmtIntLiteral(Type.usize, len_val, .Other),
+                    fmtIdent("name"),
+                    try o.dg.fmtIntLiteral(Type.usize, len_val, .Other),
                 });
 
                 try w.writeAll("  }\n");
@@ -7496,7 +7498,9 @@ fn formatIntLiteral(
             data.int_info.signedness == .signed and wrap.subWrap(int, one, data.int_info.signedness, c_bits))
             return writer.print("{s}_{s}", .{
                 data.cty.getStandardDefineAbbrev() orelse return writer.print("zig_{s}Int_{c}{d}", .{
-                    if (int.positive) "max" else "min", signAbbrev(data.int_info.signedness), c_bits,
+                    if (int.positive) "max" else "min",
+                    signAbbrev(data.int_info.signedness),
+                    c_bits,
                 }),
                 if (int.positive) "MAX" else "MIN",
             });

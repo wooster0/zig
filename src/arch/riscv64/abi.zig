@@ -72,7 +72,10 @@ pub fn classifyType(ty: Type, target: std.Target) Class {
 }
 
 pub const callee_preserved_regs = [_]Register{
-    .s0, .s1, .s2, .s3, .s4, .s5, .s6, .s7, .s8, .s9, .s10, .s11,
+    // zig fmt: off
+    .s0, .s1, .s2, .s3, .s4,  .s5,
+    .s6, .s7, .s8, .s9, .s10, .s11,
+    // zig fmt: on
 };
 
 const allocatable_registers = callee_preserved_regs;

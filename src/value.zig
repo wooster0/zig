@@ -798,7 +798,8 @@ pub const Value = extern union {
             .str_lit => {
                 const str_lit = val.castTag(.str_lit).?.data;
                 return out_stream.print("(.str_lit index={d} len={d})", .{
-                    str_lit.index, str_lit.len,
+                    str_lit.index,
+                    str_lit.len,
                 });
             },
             .repeated => {

@@ -373,25 +373,29 @@ pub const list = list: {
             },
         },
         .{
-            "@cVaArg", .{
+            "@cVaArg",
+            .{
                 .tag = .c_va_arg,
                 .param_count = 2,
             },
         },
         .{
-            "@cVaCopy", .{
+            "@cVaCopy",
+            .{
                 .tag = .c_va_copy,
                 .param_count = 1,
             },
         },
         .{
-            "@cVaEnd", .{
+            "@cVaEnd",
+            .{
                 .tag = .c_va_end,
                 .param_count = 1,
             },
         },
         .{
-            "@cVaStart", .{
+            "@cVaStart",
+            .{
                 .tag = .c_va_start,
                 .param_count = 0,
             },
@@ -992,7 +996,8 @@ pub const list = list: {
             },
         },
         .{
-            "@workItemId", .{
+            "@workItemId",
+            .{
                 .tag = .work_item_id,
                 .param_count = 1,
             },

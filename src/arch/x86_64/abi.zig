@@ -77,8 +77,10 @@ pub const Context = enum { ret, arg, other };
 /// the beginning of the array; unused slots are filled with .none.
 pub fn classifySystemV(ty: Type, target: Target, ctx: Context) [8]Class {
     const memory_class = [_]Class{
+        // zig fmt: off
         .memory, .none, .none, .none,
         .none,   .none, .none, .none,
+        // zig fmt: on
     };
     var result = [1]Class{.none} ** 8;
     switch (ty.zigTypeTag()) {
@@ -167,39 +169,55 @@ pub fn classifySystemV(ty: Type, target: Target, ctx: Context) [8]Class {
             const elem_ty = ty.childType();
             const bits = elem_ty.bitSize(target) * ty.arrayLen();
             if (bits <= 64) return .{
+                // zig fmt: off
                 .sse,  .none, .none, .none,
                 .none, .none, .none, .none,
+                // zig fmt: on
             };
             if (bits <= 128) return .{
+                // zig fmt: off
                 .sse,  .sseup, .none, .none,
                 .none, .none,  .none, .none,
+                // zig fmt: on
             };
             if (ctx == .arg and !std.Target.x86.featureSetHas(target.cpu.features, .avx)) return memory_class;
             if (bits <= 192) return .{
+                // zig fmt: off
                 .sse,  .sseup, .sseup, .none,
                 .none, .none,  .none,  .none,
+                // zig fmt: on
             };
             if (bits <= 256) return .{
+                // zig fmt: off
                 .sse,  .sseup, .sseup, .sseup,
                 .none, .none,  .none,  .none,
+                // zig fmt: on
             };
             if (ctx == .arg and !std.Target.x86.featureSetHas(target.cpu.features, .avx512f)) return memory_class;
             if (bits <= 320) return .{
+                // zig fmt: off
                 .sse,   .sseup, .sseup, .sseup,
                 .sseup, .none,  .none,  .none,
+                // zig fmt: on
             };
             if (bits <= 384) return .{
+                // zig fmt: off
                 .sse,   .sseup, .sseup, .sseup,
                 .sseup, .sseup, .none,  .none,
+                // zig fmt: on
             };
             if (bits <= 448) return .{
+                // zig fmt: off
                 .sse,   .sseup, .sseup, .sseup,
                 .sseup, .sseup, .sseup, .none,
+                // zig fmt: on
             };
             // LLVM always returns vectors byval
             if (bits <= 512 or ctx == .ret) return .{
+                // zig fmt: off
                 .sse,   .sseup, .sseup, .sseup,
                 .sseup, .sseup, .sseup, .sseup,
+                // zig fmt: on
             };
             return memory_class;
         },
@@ -497,11 +515,16 @@ pub fn getCAbiIntReturnRegs(target: Target) []const Register {
 }
 
 const gp_regs = [_]Register{
-    .rax, .rcx, .rdx, .rbx, .rsi, .rdi, .r8, .r9, .r10, .r11, .r12, .r13, .r14, .r15,
+    // zig fmt: off
+    .rax, .rcx, .rdx, .rbx, .rsi, .rdi,
+    .r8,  .r9,  .r10, .r11, .r12, .r13, .r14, .r15,
+    // zig fmt: on
 };
 const sse_avx_regs = [_]Register{
+    // zig fmt: off
     .ymm0, .ymm1, .ymm2,  .ymm3,  .ymm4,  .ymm5,  .ymm6,  .ymm7,
     .ymm8, .ymm9, .ymm10, .ymm11, .ymm12, .ymm13, .ymm14, .ymm15,
+    // zig fmt: on
 };
 const allocatable_regs = gp_regs ++ sse_avx_regs;
 pub const RegisterManager = RegisterManagerFn(@import("CodeGen.zig"), Register, &allocatable_regs);

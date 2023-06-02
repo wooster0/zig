@@ -1511,7 +1511,8 @@ fn allocStack(func: *CodeGen, ty: Type) !WValue {
     const abi_size = std.math.cast(u32, ty.abiSize(func.target)) orelse {
         const module = func.bin_file.base.options.module.?;
         return func.fail("Type {} with ABI size of {d} exceeds stack frame size", .{
-            ty.fmt(module), ty.abiSize(func.target),
+            ty.fmt(module),
+            ty.abiSize(func.target),
         });
     };
     const abi_align = ty.abiAlignment(func.target);
@@ -1546,7 +1547,8 @@ fn allocStackPtr(func: *CodeGen, inst: Air.Inst.Index) !WValue {
     const abi_size = std.math.cast(u32, pointee_ty.abiSize(func.target)) orelse {
         const module = func.bin_file.base.options.module.?;
         return func.fail("Type {} with ABI size of {d} exceeds stack frame size", .{
-            pointee_ty.fmt(module), pointee_ty.abiSize(func.target),
+            pointee_ty.fmt(module),
+            pointee_ty.abiSize(func.target),
         });
     };
     if (abi_alignment > func.stack_alignment) {
@@ -2793,7 +2795,8 @@ fn floatOp(func: *CodeGen, float_op: FloatOp, ty: Type, args: []const WValue) In
         .div,
         .mul,
         => std.fmt.bufPrint(&fn_name_buf, "__{s}{s}f3", .{
-            @tagName(float_op), target_util.compilerRtFloatAbbrev(float_bits),
+            @tagName(float_op),
+            target_util.compilerRtFloatAbbrev(float_bits),
         }) catch unreachable,
 
         .ceil,
@@ -2815,7 +2818,9 @@ fn floatOp(func: *CodeGen, float_op: FloatOp, ty: Type, args: []const WValue) In
         .tan,
         .trunc,
         => std.fmt.bufPrint(&fn_name_buf, "{s}{s}{s}", .{
-            target_util.libcFloatPrefix(float_bits), @tagName(float_op), target_util.libcFloatSuffix(float_bits),
+            target_util.libcFloatPrefix(float_bits),
+            @tagName(float_op),
+            target_util.libcFloatSuffix(float_bits),
         }) catch unreachable,
         .neg => unreachable, // handled above
     };

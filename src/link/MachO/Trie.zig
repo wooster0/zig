@@ -524,6 +524,7 @@ test "write Trie to a byte stream" {
     try trie.finalize(gpa); // Finalizing multiple times is a nop subsequently unless we add new nodes.
 
     const exp_buffer = [_]u8{
+        // zig fmt: off
         0x0, 0x1, // node root
         0x5f, 0x0, 0x5, // edge '_'
         0x0, 0x2, // non-terminal node
@@ -532,6 +533,7 @@ test "write Trie to a byte stream" {
         0x6d, 0x61, 0x69, 0x6e, 0x0, 0x25, // edge 'main'
         0x2, 0x0, 0x0, 0x0, // terminal node
         0x3, 0x0, 0x80, 0x20, 0x0, // terminal node
+        // zig fmt: on
     };
 
     var buffer = try gpa.alloc(u8, trie.size);
@@ -553,6 +555,7 @@ test "parse Trie from byte stream" {
     var gpa = testing.allocator;
 
     const in_buffer = [_]u8{
+        // zig fmt: off
         0x0, 0x1, // node root
         0x5f, 0x0, 0x5, // edge '_'
         0x0, 0x2, // non-terminal node
@@ -561,6 +564,7 @@ test "parse Trie from byte stream" {
         0x6d, 0x61, 0x69, 0x6e, 0x0, 0x25, // edge 'main'
         0x2, 0x0, 0x0, 0x0, // terminal node
         0x3, 0x0, 0x80, 0x20, 0x0, // terminal node
+        // zig fmt: on
     };
 
     var in_stream = std.io.fixedBufferStream(&in_buffer);
@@ -597,9 +601,11 @@ test "ordering bug" {
     try trie.finalize(gpa);
 
     const exp_buffer = [_]u8{
+        // zig fmt: off
         0x00, 0x01, 0x5F, 0x61, 0x00, 0x06, 0x04, 0x00,
         0x88, 0x80, 0x02, 0x01, 0x73, 0x53, 0x74, 0x72,
         0x00, 0x12, 0x03, 0x00, 0xD8, 0x0A, 0x00,
+        // zig fmt: on
     };
 
     var buffer = try gpa.alloc(u8, trie.size);

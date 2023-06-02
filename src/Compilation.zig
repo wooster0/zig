@@ -2362,7 +2362,8 @@ fn emitOthers(comp: *Compilation) void {
         if (out.emit) |loc| {
             if (loc.directory) |directory| {
                 const src_path = std.fmt.allocPrint(comp.gpa, "{s}{s}", .{
-                    basename, out.ext,
+                    basename,
+                    out.ext,
                 }) catch |err| {
                     log.err("unable to copy {s}{s}: {s}", .{ basename, out.ext, @errorName(err) });
                     continue;
@@ -2782,7 +2783,8 @@ pub fn addModuleErrorMsg(eb: *ErrorBundle.Wip, module_err_msg: Module.ErrorMsg) 
         defer gpa.free(file_path);
         try eb.addRootErrorMessage(.{
             .msg = try eb.printString("unable to load '{s}': {s}", .{
-                file_path, @errorName(err),
+                file_path,
+                @errorName(err),
             }),
         });
         return;
@@ -3013,7 +3015,9 @@ pub fn performAllTheWork(
 
                 comp.astgen_wait_group.start();
                 try comp.thread_pool.spawn(workerUpdateBuiltinZigFile, .{
-                    comp, mod, &comp.astgen_wait_group,
+                    comp,
+                    mod,
+                    &comp.astgen_wait_group,
                 });
             }
         }
@@ -3021,21 +3025,31 @@ pub fn performAllTheWork(
         while (comp.astgen_work_queue.readItem()) |file| {
             comp.astgen_wait_group.start();
             try comp.thread_pool.spawn(workerAstGenFile, .{
-                comp, file, &zir_prog_node, &comp.astgen_wait_group, .root,
+                comp,
+                file,
+                &zir_prog_node,
+                &comp.astgen_wait_group,
+                .root,
             });
         }
 
         while (comp.embed_file_work_queue.readItem()) |embed_file| {
             comp.astgen_wait_group.start();
             try comp.thread_pool.spawn(workerCheckEmbedFile, .{
-                comp, embed_file, &embed_file_prog_node, &comp.astgen_wait_group,
+                comp,
+                embed_file,
+                &embed_file_prog_node,
+                &comp.astgen_wait_group,
             });
         }
 
         while (comp.c_object_work_queue.readItem()) |c_object| {
             comp.work_queue_wait_group.start();
             try comp.thread_pool.spawn(workerUpdateCObject, .{
-                comp, c_object, &c_obj_prog_node, &comp.work_queue_wait_group,
+                comp,
+                c_object,
+                &c_obj_prog_node,
+                &comp.work_queue_wait_group,
             });
         }
     }
@@ -3486,7 +3500,9 @@ fn workerAstGenFile(
             };
             if (import_result.is_new) {
                 log.debug("AstGen of {s} has import '{s}'; queuing AstGen of {s}", .{
-                    file.sub_file_path, import_path, import_result.file.sub_file_path,
+                    file.sub_file_path,
+                    import_path,
+                    import_result.file.sub_file_path,
                 });
                 const sub_src: AstGenSrc = .{ .import = .{
                     .importing_file = file,
@@ -3494,7 +3510,11 @@ fn workerAstGenFile(
                 } };
                 wg.start();
                 comp.thread_pool.spawn(workerAstGenFile, .{
-                    comp, import_result.file, prog_node, wg, sub_src,
+                    comp,
+                    import_result.file,
+                    prog_node,
+                    wg,
+                    sub_src,
                 }) catch {
                     wg.finish();
                     continue;
@@ -3518,7 +3538,8 @@ fn workerUpdateBuiltinZigFile(
         defer comp.mutex.unlock();
 
         comp.setMiscFailure(.write_builtin_zig, "unable to write builtin.zig to {s}: {s}", .{
-            dir_path, @errorName(err),
+            dir_path,
+            @errorName(err),
         });
     };
 }
@@ -3617,7 +3638,8 @@ pub fn cImport(comp: *Compilation, c_src: []const u8) !CImportResult {
         defer zig_cache_tmp_dir.close();
         const cimport_basename = "cimport.h";
         const out_h_path = try comp.local_cache_directory.join(arena, &[_][]const u8{
-            tmp_dir_sub_path, cimport_basename,
+            tmp_dir_sub_path,
+            cimport_basename,
         });
         const out_dep_path = try std.fmt.allocPrint(arena, "{s}.d", .{out_h_path});
 
@@ -3709,7 +3731,9 @@ pub fn cImport(comp: *Compilation, c_src: []const u8) !CImportResult {
     }
 
     const out_zig_path = try comp.local_cache_directory.join(comp.gpa, &[_][]const u8{
-        "o", &digest, cimport_zig_basename,
+        "o",
+        &digest,
+        cimport_zig_basename,
     });
     if (comp.verbose_cimport) {
         log.info("C import output: {s}", .{out_zig_path});
@@ -3822,7 +3846,8 @@ fn reportRetryableAstGenError(
         )
     else
         try Module.ErrorMsg.create(gpa, src_loc, "unable to load '{s}': {s}", .{
-            file.sub_file_path, @errorName(err),
+            file.sub_file_path,
+            @errorName(err),
         });
     errdefer err_msg.destroy(gpa);
 
@@ -3852,7 +3877,8 @@ fn reportRetryableEmbedFileError(
         )
     else
         try Module.ErrorMsg.create(gpa, src_loc, "unable to load '{s}': {s}", .{
-            embed_file.sub_file_path, @errorName(err),
+            embed_file.sub_file_path,
+            @errorName(err),
         });
     errdefer err_msg.destroy(gpa);
 
@@ -4136,7 +4162,9 @@ fn updateCObject(comp: *Compilation, c_object: *CObject, c_obj_prog_node: *std.P
     c_object.status = .{
         .success = .{
             .object_path = try comp.local_cache_directory.join(comp.gpa, &[_][]const u8{
-                "o", &digest, o_basename,
+                "o",
+                &digest,
+                o_basename,
             }),
             .lock = man.toOwnedLock(),
         },
@@ -4205,10 +4233,14 @@ pub fn addCCArgs(
 
     if (comp.bin_file.options.link_libcpp) {
         const libcxx_include_path = try std.fs.path.join(arena, &[_][]const u8{
-            comp.zig_lib_directory.path.?, "libcxx", "include",
+            comp.zig_lib_directory.path.?,
+            "libcxx",
+            "include",
         });
         const libcxxabi_include_path = try std.fs.path.join(arena, &[_][]const u8{
-            comp.zig_lib_directory.path.?, "libcxxabi", "include",
+            comp.zig_lib_directory.path.?,
+            "libcxxabi",
+            "include",
         });
 
         try argv.append("-isystem");
@@ -4238,7 +4270,9 @@ pub fn addCCArgs(
 
     if (comp.bin_file.options.link_libunwind) {
         const libunwind_include_path = try std.fs.path.join(arena, &[_][]const u8{
-            comp.zig_lib_directory.path.?, "libunwind", "include",
+            comp.zig_lib_directory.path.?,
+            "libunwind",
+            "include",
         });
 
         try argv.append("-isystem");
@@ -4284,7 +4318,10 @@ pub fn addCCArgs(
 
             if (target.cpu.model.llvm_name) |llvm_name| {
                 try argv.appendSlice(&[_][]const u8{
-                    "-Xclang", "-target-cpu", "-Xclang", llvm_name,
+                    "-Xclang",
+                    "-target-cpu",
+                    "-Xclang",
+                    llvm_name,
                 });
             }
 
@@ -4320,7 +4357,9 @@ pub fn addCCArgs(
                     // Pass the proper -m<os>-version-min argument for darwin.
                     const ver = target.os.version_range.semver.min;
                     argv.appendAssumeCapacity(try std.fmt.allocPrint(arena, "-mmacos-version-min={d}.{d}.{d}", .{
-                        ver.major, ver.minor, ver.patch,
+                        ver.major,
+                        ver.minor,
+                        ver.patch,
                     }));
                     // This avoids a warning that sometimes occurs when
                     // providing both a -target argument that contains a
@@ -4342,7 +4381,10 @@ pub fn addCCArgs(
                     else => {
                         const ver = target.os.version_range.semver.min;
                         try argv.append(try std.fmt.allocPrint(arena, "-m{s}-version-min={d}.{d}.{d}", .{
-                            @tagName(target.os.tag), ver.major, ver.minor, ver.patch,
+                            @tagName(target.os.tag),
+                            ver.major,
+                            ver.minor,
+                            ver.patch,
                         }));
                     },
                 },

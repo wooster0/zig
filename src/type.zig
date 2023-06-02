@@ -1619,37 +1619,43 @@ pub const Type = extern union {
                 .@"struct" => {
                     const struct_obj = ty.castTag(.@"struct").?.data;
                     return writer.print("({s} decl={d})", .{
-                        @tagName(t), struct_obj.owner_decl,
+                        @tagName(t),
+                        struct_obj.owner_decl,
                     });
                 },
                 .@"union", .union_safety_tagged, .union_tagged => {
                     const union_obj = ty.cast(Payload.Union).?.data;
                     return writer.print("({s} decl={d})", .{
-                        @tagName(t), union_obj.owner_decl,
+                        @tagName(t),
+                        union_obj.owner_decl,
                     });
                 },
                 .enum_full, .enum_nonexhaustive => {
                     const enum_full = ty.cast(Payload.EnumFull).?.data;
                     return writer.print("({s} decl={d})", .{
-                        @tagName(t), enum_full.owner_decl,
+                        @tagName(t),
+                        enum_full.owner_decl,
                     });
                 },
                 .enum_simple => {
                     const enum_simple = ty.castTag(.enum_simple).?.data;
                     return writer.print("({s} decl={d})", .{
-                        @tagName(t), enum_simple.owner_decl,
+                        @tagName(t),
+                        enum_simple.owner_decl,
                     });
                 },
                 .enum_numbered => {
                     const enum_numbered = ty.castTag(.enum_numbered).?.data;
                     return writer.print("({s} decl={d})", .{
-                        @tagName(t), enum_numbered.owner_decl,
+                        @tagName(t),
+                        enum_numbered.owner_decl,
                     });
                 },
                 .@"opaque" => {
                     const opaque_obj = ty.castTag(.@"opaque").?.data;
                     return writer.print("({s} decl={d})", .{
-                        @tagName(t), opaque_obj.owner_decl,
+                        @tagName(t),
+                        opaque_obj.owner_decl,
                     });
                 },
 
@@ -1902,7 +1908,8 @@ pub const Type = extern union {
                 .error_set_inferred => {
                     const func = ty.castTag(.error_set_inferred).?.data.func;
                     return writer.print("({s} func={d})", .{
-                        @tagName(t), func.owner_decl,
+                        @tagName(t),
+                        func.owner_decl,
                     });
                 },
                 .error_set_merged => {

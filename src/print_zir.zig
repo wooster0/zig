@@ -1112,7 +1112,8 @@ const Writer = struct {
                 const name = self.code.nullTerminatedString(output.data.name);
                 const constraint = self.code.nullTerminatedString(output.data.constraint);
                 try stream.print("output({}, \"{}\", ", .{
-                    std.zig.fmtId(name), std.zig.fmtEscapes(constraint),
+                    std.zig.fmtId(name),
+                    std.zig.fmtEscapes(constraint),
                 });
                 try self.writeFlag(stream, "->", is_type);
                 try self.writeInstRef(stream, output.data.operand);
@@ -1131,7 +1132,8 @@ const Writer = struct {
                 const name = self.code.nullTerminatedString(input.data.name);
                 const constraint = self.code.nullTerminatedString(input.data.constraint);
                 try stream.print("input({}, \"{}\", ", .{
-                    std.zig.fmtId(name), std.zig.fmtEscapes(constraint),
+                    std.zig.fmtId(name),
+                    std.zig.fmtEscapes(constraint),
                 });
                 try self.writeInstRef(stream, input.data.operand);
                 try stream.writeAll(")");
@@ -1484,7 +1486,8 @@ const Writer = struct {
         } else 0;
 
         try stream.print("{s}, {s}, ", .{
-            @tagName(small.name_strategy), @tagName(small.layout),
+            @tagName(small.name_strategy),
+            @tagName(small.layout),
         });
         try self.writeFlag(stream, "autoenum, ", small.auto_enum_tag);
 
@@ -1666,7 +1669,12 @@ const Writer = struct {
                 try stream.writeByteNTimes(' ', self.indent);
                 const endquote_if_test: []const u8 = if (raw_decl_name.len == 0) "\"" else "";
                 try stream.print("[{d}] {s}{s}{s}{}{s}", .{
-                    sub_index, pub_str, test_str, export_str, std.zig.fmtId(decl_name), endquote_if_test,
+                    sub_index,
+                    pub_str,
+                    test_str,
+                    export_str,
+                    std.zig.fmtId(decl_name),
+                    endquote_if_test,
                 });
                 if (align_inst != .none) {
                     try stream.writeAll(" align(");
@@ -1688,7 +1696,10 @@ const Writer = struct {
             if (self.recurse_decls) {
                 const tag = self.code.instructions.items(.tag)[decl_index];
                 try stream.print(" line({d}) hash({}): %{d} = {s}(", .{
-                    line, std.fmt.fmtSliceHexLower(&hash_bytes), decl_index, @tagName(tag),
+                    line,
+                    std.fmt.fmtSliceHexLower(&hash_bytes),
+                    decl_index,
+                    @tagName(tag),
                 });
 
                 const decl_block_inst_data = self.code.instructions.items(.data)[decl_index].pl_node;
@@ -1700,7 +1711,9 @@ const Writer = struct {
                 try stream.writeAll("\n");
             } else {
                 try stream.print(" line({d}) hash({}): %{d} = ...\n", .{
-                    line, std.fmt.fmtSliceHexLower(&hash_bytes), decl_index,
+                    line,
+                    std.fmt.fmtSliceHexLower(&hash_bytes),
+                    decl_index,
                 });
             }
         }
@@ -2429,8 +2442,10 @@ const Writer = struct {
         try stream.writeAll(") ");
         if (body.len != 0) {
             try stream.print("(lbrace={d}:{d},rbrace={d}:{d}) ", .{
-                src_locs.lbrace_line + 1, @truncate(u16, src_locs.columns) + 1,
-                src_locs.rbrace_line + 1, @truncate(u16, src_locs.columns >> 16) + 1,
+                src_locs.lbrace_line + 1,
+                @truncate(u16, src_locs.columns) + 1,
+                src_locs.rbrace_line + 1,
+                @truncate(u16, src_locs.columns >> 16) + 1,
             });
         }
         try self.writeSrc(stream, src);
@@ -2535,8 +2550,11 @@ const Writer = struct {
             const start = std.zig.findLineColumn(tree.source, src_span.start);
             const end = std.zig.findLineColumn(tree.source, src_span.end);
             try stream.print("{s}:{d}:{d} to :{d}:{d}", .{
-                @tagName(src), start.line + 1, start.column + 1,
-                end.line + 1,  end.column + 1,
+                @tagName(src),
+                start.line + 1,
+                start.column + 1,
+                end.line + 1,
+                end.column + 1,
             });
         }
     }

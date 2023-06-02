@@ -323,7 +323,8 @@ pub const File = struct {
             // Open a temporary object file, not the final output file because we
             // want to link with LLD.
             break :blk try std.fmt.allocPrint(allocator, "{s}{s}", .{
-                emit.sub_path, options.target.ofmt.fileExt(options.target.cpu.arch),
+                emit.sub_path,
+                options.target.ofmt.fileExt(options.target.cpu.arch),
             });
         } else emit.sub_path;
         errdefer if (use_lld) allocator.free(sub_path);
@@ -398,7 +399,8 @@ pub const File = struct {
                         // over top of the exe path, and then proceed normally. This changes the inode,
                         // avoiding the error.
                         const tmp_sub_path = try std.fmt.allocPrint(base.allocator, "{s}-{x}", .{
-                            emit.sub_path, std.crypto.random.int(u32),
+                            emit.sub_path,
+                            std.crypto.random.int(u32),
                         });
                         try emit.directory.handle.copyFile(emit.sub_path, emit.directory.handle, tmp_sub_path, .{});
                         try emit.directory.handle.rename(tmp_sub_path, emit.sub_path);
@@ -567,7 +569,9 @@ pub const File = struct {
     pub fn updateFunc(base: *File, module: *Module, func: *Module.Fn, air: Air, liveness: Liveness) UpdateDeclError!void {
         const owner_decl = module.declPtr(func.owner_decl);
         log.debug("updateFunc {*} ({s}), type={}", .{
-            owner_decl, owner_decl.name, owner_decl.ty.fmt(module),
+            owner_decl,
+            owner_decl.name,
+            owner_decl.ty.fmt(module),
         });
         if (build_options.only_c) {
             assert(base.tag == .c);
@@ -590,7 +594,9 @@ pub const File = struct {
     pub fn updateDeclLineNumber(base: *File, module: *Module, decl_index: Module.Decl.Index) UpdateDeclError!void {
         const decl = module.declPtr(decl_index);
         log.debug("updateDeclLineNumber {*} ({s}), line={}", .{
-            decl, decl.name, decl.src_line + 1,
+            decl,
+            decl.name,
+            decl.src_line + 1,
         });
         assert(decl.has_tv);
         if (build_options.only_c) {

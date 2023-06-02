@@ -317,7 +317,8 @@ pub fn fetchAndAddDependencies(
         }
 
         try dependencies_source.writer().print("    pub const {s} = @import(\"{}\");\n", .{
-            std.zig.fmtId(fqn), std.zig.fmtEscapes(dep.hash.?),
+            std.zig.fmtId(fqn),
+            std.zig.fmtEscapes(dep.hash.?),
         });
     }
 }
@@ -435,7 +436,8 @@ fn fetchAndUnpack(
         errdefer pkg_dir.close();
 
         try build_roots_source.writer().print("    pub const {s} = \"{}\";\n", .{
-            std.zig.fmtId(fqn), std.zig.fmtEscapes(build_root),
+            std.zig.fmtId(fqn),
+            std.zig.fmtEscapes(build_root),
         });
 
         // The compiler has a rule that a file must not be included in multiple modules,
@@ -553,7 +555,8 @@ fn fetchAndUnpack(
     if (dep.hash) |h| {
         if (!mem.eql(u8, h, &actual_hex)) {
             return report.fail(dep.hash_tok, "hash mismatch: expected: {s}, found: {s}", .{
-                h, actual_hex,
+                h,
+                actual_hex,
             });
         }
     } else {
@@ -578,7 +581,8 @@ fn fetchAndUnpack(
     defer gpa.free(build_root);
 
     try build_roots_source.writer().print("    pub const {s} = \"{}\";\n", .{
-        std.zig.fmtId(fqn), std.zig.fmtEscapes(build_root),
+        std.zig.fmtId(fqn),
+        std.zig.fmtEscapes(build_root),
     });
 
     const mod = try createWithDir(gpa, global_cache_directory, pkg_dir_sub_path, build_zig_basename);

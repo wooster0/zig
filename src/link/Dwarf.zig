@@ -820,14 +820,17 @@ pub const DeclState = struct {
             .none => {
                 try dbg_info.ensureUnusedCapacity(3);
                 dbg_info.appendSliceAssumeCapacity(&[3]u8{ // DW.AT.location, DW.FORM.exprloc
-                    2, DW.OP.lit0, DW.OP.stack_value,
+                    2,
+                    DW.OP.lit0,
+                    DW.OP.stack_value,
                 });
             },
 
             .nop => {
                 try dbg_info.ensureUnusedCapacity(2);
                 dbg_info.appendSliceAssumeCapacity(&[2]u8{ // DW.AT.location, DW.FORM.exprloc
-                    1, DW.OP.nop,
+                    1,
+                    DW.OP.nop,
                 });
             },
         }
@@ -1511,7 +1514,10 @@ fn writeDeclDebugInfo(self: *Dwarf, atom_index: Atom.Index, dbg_info_buf: []cons
                 debug_info.items.len = needed_size;
             }
             log.debug(" writeDbgInfoNopsToArrayList debug_info_len={d} offset={d} content_len={d} next_padding_size={d}", .{
-                debug_info.items.len, atom.off, dbg_info_buf.len, next_padding_size,
+                debug_info.items.len,
+                atom.off,
+                dbg_info_buf.len,
+                next_padding_size,
             });
             try writeDbgInfoNopsToArrayList(
                 gpa,
@@ -1631,6 +1637,7 @@ pub fn writeDbgAbbrev(self: *Dwarf) !void {
     // These are LEB encoded but since the values are all less than 127
     // we can simply append these bytes.
     const abbrev_buf = [_]u8{
+        // zig fmt: off
         @enumToInt(AbbrevKind.compile_unit), DW.TAG.compile_unit, DW.CHILDREN.yes, // header
         DW.AT.stmt_list,                     DW.FORM.sec_offset,  DW.AT.low_pc,
         DW.FORM.addr,                        DW.AT.high_pc,       DW.FORM.addr,
@@ -1756,6 +1763,7 @@ pub fn writeDbgAbbrev(self: *Dwarf) !void {
         0,
         0,
         0, // section sentinel
+        // zig fmt: on
     };
     const abbrev_offset = 0;
     self.abbrev_table_offset = abbrev_offset;
@@ -2640,7 +2648,8 @@ fn genIncludeDirsAndFileNames(self: *Dwarf, arena: Allocator) !struct {
             else
                 std.os.realpath(dir_path, &buffer) catch dir_path; // If realpath fails, fallback to whatever dir_path was
             break :d try std.fs.path.join(arena, &.{
-                abs_dir_path, std.fs.path.dirname(dif.sub_file_path) orelse "",
+                abs_dir_path,
+                std.fs.path.dirname(dif.sub_file_path) orelse "",
             });
         };
         const sub_file_path = try arena.dupe(u8, std.fs.path.basename(dif.sub_file_path));

@@ -769,7 +769,8 @@ pub const Object = struct {
                     defer llvm.disposeMessage(error_message);
 
                     log.err("dump LLVM module failed ir={s}: {s}", .{
-                        path, error_message,
+                        path,
+                        error_message,
                     });
                 }
             }
@@ -782,7 +783,8 @@ pub const Object = struct {
             const error_code = self.llvm_module.writeBitcodeToFile(path_z);
             if (error_code != 0) {
                 log.err("dump LLVM module failed bc={s}: {d}", .{
-                    path, error_code,
+                    path,
+                    error_code,
                 });
             }
         }
@@ -824,7 +826,10 @@ pub const Object = struct {
         const emit_llvm_ir_msg = emit_llvm_ir_path orelse "(none)";
         const emit_llvm_bc_msg = emit_llvm_bc_path orelse "(none)";
         log.debug("emit LLVM object asm={s} bin={s} ir={s} bc={s}", .{
-            emit_asm_msg, emit_bin_msg, emit_llvm_ir_msg, emit_llvm_bc_msg,
+            emit_asm_msg,
+            emit_bin_msg,
+            emit_llvm_ir_msg,
+            emit_llvm_bc_msg,
         });
 
         // Unfortunately, LLVM shits the bed when we ask for both binary and assembly.
@@ -847,7 +852,9 @@ pub const Object = struct {
                 defer llvm.disposeMessage(error_message);
 
                 log.err("LLVM failed to emit bin={s} ir={s}: {s}", .{
-                    emit_bin_msg, emit_llvm_ir_msg, error_message,
+                    emit_bin_msg,
+                    emit_llvm_ir_msg,
+                    error_message,
                 });
                 return error.FailedToEmit;
             }
@@ -871,7 +878,10 @@ pub const Object = struct {
             defer llvm.disposeMessage(error_message);
 
             log.err("LLVM failed to emit asm={s} bin={s} ir={s} bc={s}: {s}", .{
-                emit_asm_msg,  emit_bin_msg, emit_llvm_ir_msg, emit_llvm_bc_msg,
+                emit_asm_msg,
+                emit_bin_msg,
+                emit_llvm_ir_msg,
+                emit_llvm_bc_msg,
                 error_message,
             });
             return error.FailedToEmit;
@@ -1421,7 +1431,8 @@ pub const Object = struct {
             else
                 std.os.realpath(dir_path, &buffer) catch dir_path; // If realpath fails, fallback to whatever dir_path was
             break :d try std.fs.path.joinZ(gpa, &.{
-                resolved_dir_path, std.fs.path.dirname(file.sub_file_path) orelse "",
+                resolved_dir_path,
+                std.fs.path.dirname(file.sub_file_path) orelse "",
             });
         };
         defer gpa.free(dir_path_z);
@@ -2489,7 +2500,9 @@ pub const DeclGen = struct {
         assert(decl.has_tv);
 
         log.debug("gen: {s} type: {}, value: {}", .{
-            decl.name, decl.ty.fmtDebug(), decl.val.fmtDebug(),
+            decl.name,
+            decl.ty.fmtDebug(),
+            decl.val.fmtDebug(),
         });
         assert(decl.val.tag() != .function);
         if (decl.val.castTag(.extern_fn)) |extern_fn| {
@@ -2793,7 +2806,9 @@ pub const DeclGen = struct {
             const llvm_size = dg.object.target_data.abiSizeOfType(llvm_ty);
             if (llvm_size != zig_size) {
                 log.err("when lowering {}, Zig ABI size = {d} but LLVM ABI size = {d}", .{
-                    t.fmt(dg.module), zig_size, llvm_size,
+                    t.fmt(dg.module),
+                    zig_size,
+                    llvm_size,
                 });
             }
         }
@@ -2885,7 +2900,9 @@ pub const DeclGen = struct {
 
                 comptime assert(optional_layout_version == 3);
                 var fields_buf: [3]*llvm.Type = .{
-                    payload_llvm_ty, dg.context.intType(8), undefined,
+                    payload_llvm_ty,
+                    dg.context.intType(8),
+                    undefined,
                 };
                 const offset = child_ty.abiSize(target) + 1;
                 const abi_size = t.abiSize(target);
@@ -3423,7 +3440,8 @@ pub const DeclGen = struct {
                     return dg.lowerParentPtr(payload, tv.ty.ptrInfo().data.bit_offset % 8 == 0);
                 },
                 else => |tag| return dg.todo("implement const of pointer type '{}' ({})", .{
-                    tv.ty.fmtDebug(), tag,
+                    tv.ty.fmtDebug(),
+                    tag,
                 }),
             },
             .Array => switch (tv.val.tag()) {
@@ -3854,7 +3872,8 @@ pub const DeclGen = struct {
                     }
                     const padding_len = @intCast(c_uint, layout.payload_size - field_size);
                     const fields: [2]*llvm.Value = .{
-                        field, dg.context.intType(8).arrayType(padding_len).getUndef(),
+                        field,
+                        dg.context.intType(8).arrayType(padding_len).getUndef(),
                     };
                     break :p dg.context.constStruct(&fields, fields.len, .True);
                 };
@@ -5657,7 +5676,8 @@ pub const FuncGen = struct {
             return self.builder.buildInsertValue(partial, len, 1, "");
         }
         const indices: [2]*llvm.Value = .{
-            llvm_usize.constNull(), llvm_usize.constNull(),
+            llvm_usize.constNull(),
+            llvm_usize.constNull(),
         };
         const array_llvm_ty = try self.dg.lowerType(array_ty);
         const ptr = self.builder.buildInBoundsGEP(array_llvm_ty, operand, &indices, indices.len, "");
@@ -7364,7 +7384,8 @@ pub const FuncGen = struct {
             .One => {
                 // It's a pointer to an array, so according to LLVM we need an extra GEP index.
                 const indices: [2]*llvm.Value = .{
-                    self.context.intType(32).constNull(), negative_offset,
+                    self.context.intType(32).constNull(),
+                    negative_offset,
                 };
                 return self.builder.buildInBoundsGEP(llvm_elem_ty, ptr, &indices, indices.len, "");
             },
@@ -7514,7 +7535,8 @@ pub const FuncGen = struct {
             .gte => "ge",
         };
         const fn_name = std.fmt.bufPrintZ(&fn_name_buf, "__{s}{s}f2", .{
-            fn_base_name, compiler_rt_float_abbrev,
+            fn_base_name,
+            compiler_rt_float_abbrev,
         }) catch unreachable;
 
         const param_types = [2]*llvm.Type{ scalar_llvm_ty, scalar_llvm_ty };
@@ -7628,7 +7650,8 @@ pub const FuncGen = struct {
                 },
                 .add, .sub, .div, .mul => FloatOpStrat{
                     .libc = std.fmt.bufPrintZ(&fn_name_buf, "__{s}{s}f3", .{
-                        @tagName(op), compilerRtFloatAbbrev(float_bits),
+                        @tagName(op),
+                        compilerRtFloatAbbrev(float_bits),
                     }) catch unreachable,
                 },
                 .ceil,
@@ -7651,7 +7674,9 @@ pub const FuncGen = struct {
                 .trunc,
                 => FloatOpStrat{
                     .libc = std.fmt.bufPrintZ(&fn_name_buf, "{s}{s}{s}", .{
-                        libcFloatPrefix(float_bits), @tagName(op), libcFloatSuffix(float_bits),
+                        libcFloatPrefix(float_bits),
+                        @tagName(op),
+                        libcFloatSuffix(float_bits),
                     }) catch unreachable,
                 },
             };
@@ -7927,7 +7952,8 @@ pub const FuncGen = struct {
 
             var fn_name_buf: [64]u8 = undefined;
             const fn_name = std.fmt.bufPrintZ(&fn_name_buf, "__trunc{s}f{s}f2", .{
-                compilerRtFloatAbbrev(src_bits), compilerRtFloatAbbrev(dest_bits),
+                compilerRtFloatAbbrev(src_bits),
+                compilerRtFloatAbbrev(dest_bits),
             }) catch unreachable;
 
             const params = [1]*llvm.Value{operand};
@@ -7956,7 +7982,8 @@ pub const FuncGen = struct {
 
             var fn_name_buf: [64]u8 = undefined;
             const fn_name = std.fmt.bufPrintZ(&fn_name_buf, "__extend{s}f{s}f2", .{
-                compilerRtFloatAbbrev(src_bits), compilerRtFloatAbbrev(dest_bits),
+                compilerRtFloatAbbrev(src_bits),
+                compilerRtFloatAbbrev(dest_bits),
             }) catch unreachable;
 
             const params = [1]*llvm.Value{operand};
@@ -8804,10 +8831,12 @@ pub const FuncGen = struct {
 
         const llvm_type = self.context.intType(1);
         const incoming_values: [2]*llvm.Value = .{
-            llvm_type.constInt(1, .False), llvm_type.constInt(0, .False),
+            llvm_type.constInt(1, .False),
+            llvm_type.constInt(0, .False),
         };
         const incoming_blocks: [2]*llvm.BasicBlock = .{
-            valid_block, invalid_block,
+            valid_block,
+            invalid_block,
         };
         const phi_node = self.builder.buildPhi(llvm_type, "");
         phi_node.addIncoming(&incoming_values, &incoming_blocks, 2);
@@ -8956,7 +8985,8 @@ pub const FuncGen = struct {
         const switch_instr = self.builder.buildSwitch(tag_int_value, bad_value_block, @intCast(c_uint, fields.count()));
 
         const array_ptr_indices = [_]*llvm.Value{
-            usize_llvm_ty.constNull(), usize_llvm_ty.constNull(),
+            usize_llvm_ty.constNull(),
+            usize_llvm_ty.constNull(),
         };
 
         for (fields.keys(), 0..) |name, field_index| {
@@ -9208,10 +9238,12 @@ pub const FuncGen = struct {
         const float_bits = scalar_ty.floatBits(target);
         const fn_name = switch (reduce.operation) {
             .Min => std.fmt.bufPrintZ(&fn_name_buf, "{s}fmin{s}", .{
-                libcFloatPrefix(float_bits), libcFloatSuffix(float_bits),
+                libcFloatPrefix(float_bits),
+                libcFloatSuffix(float_bits),
             }) catch unreachable,
             .Max => std.fmt.bufPrintZ(&fn_name_buf, "{s}fmax{s}", .{
-                libcFloatPrefix(float_bits), libcFloatSuffix(float_bits),
+                libcFloatPrefix(float_bits),
+                libcFloatSuffix(float_bits),
             }) catch unreachable,
             .Add => std.fmt.bufPrintZ(&fn_name_buf, "__add{s}f3", .{
                 compilerRtFloatAbbrev(float_bits),
@@ -9445,7 +9477,8 @@ pub const FuncGen = struct {
                 }
                 const padding_len = @intCast(c_uint, layout.payload_size - field_size);
                 const fields: [2]*llvm.Type = .{
-                    field_llvm_ty, self.context.intType(8).arrayType(padding_len),
+                    field_llvm_ty,
+                    self.context.intType(8).arrayType(padding_len),
                 };
                 break :p self.context.structType(&fields, fields.len, .True);
             };
@@ -9564,7 +9597,10 @@ pub const FuncGen = struct {
             // declare void @llvm.prefetch(i8*, i32, i32, i32)
             const llvm_void = self.context.voidType();
             const param_types = [_]*llvm.Type{
-                llvm_ptr_u8, llvm_u32, llvm_u32, llvm_u32,
+                llvm_ptr_u8,
+                llvm_u32,
+                llvm_u32,
+                llvm_u32,
             };
             const fn_type = llvm.functionType(llvm_void, &param_types, param_types.len, .False);
             break :blk self.dg.object.llvm_module.addFunction(llvm_fn_name, fn_type);
@@ -10046,7 +10082,8 @@ pub const FuncGen = struct {
         const zero = usize_llvm_ty.constInt(0, .False);
         for (array_elements, 0..) |elem, i| {
             const indexes = [_]*llvm.Value{
-                zero, usize_llvm_ty.constInt(@intCast(c_uint, i), .False),
+                zero,
+                usize_llvm_ty.constInt(@intCast(c_uint, i), .False),
             };
             const elem_ptr = fg.builder.buildInBoundsGEP(array_llvm_ty, array_ptr, &indexes, indexes.len, "");
             const store_inst = fg.builder.buildStore(elem, elem_ptr);

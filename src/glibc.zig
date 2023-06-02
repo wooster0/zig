@@ -266,7 +266,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                 };
             };
             return comp.build_crt_file("Scrt1", .Obj, .@"glibc Scrt1.o", prog_node, &.{
-                start_o, abi_note_o,
+                start_o,
+                abi_note_o,
             });
         },
         .libc_nonshared_a => {
@@ -488,7 +489,10 @@ fn add_include_dirs(comp: *Compilation, arena: Allocator, args: *std.ArrayList([
 
     try args.append("-I");
     try args.append(try std.fmt.allocPrint(arena, "{s}" ++ s ++ "libc" ++ s ++ "include" ++ s ++ "{s}-{s}-{s}", .{
-        comp.zig_lib_directory.path.?, @tagName(target.cpu.arch), @tagName(target.os.tag), @tagName(target.abi),
+        comp.zig_lib_directory.path.?,
+        @tagName(target.cpu.arch),
+        @tagName(target.os.tag),
+        @tagName(target.abi),
     }));
 
     try args.append("-I");
@@ -497,7 +501,8 @@ fn add_include_dirs(comp: *Compilation, arena: Allocator, args: *std.ArrayList([
     const arch_name = target_util.osArchName(target);
     try args.append("-I");
     try args.append(try std.fmt.allocPrint(arena, "{s}" ++ s ++ "libc" ++ s ++ "include" ++ s ++ "{s}-linux-any", .{
-        comp.zig_lib_directory.path.?, arch_name,
+        comp.zig_lib_directory.path.?,
+        arch_name,
     }));
 
     try args.append("-I");
@@ -724,7 +729,8 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: *std.Progress.Node) !vo
     } else blk: {
         const latest_index = metadata.all_versions.len - 1;
         log.warn("zig cannot build new glibc version {}; providing instead {}", .{
-            target_version, metadata.all_versions[latest_index],
+            target_version,
+            metadata.all_versions[latest_index],
         });
         break :blk latest_index;
     };

@@ -77,7 +77,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             return comp.build_crt_file("crt1-reactor", .Obj, .@"wasi crt1-reactor.o", prog_node, &.{
                 .{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", try sanitize(arena, crt1_reactor_src_file),
+                        "libc",
+                        try sanitize(arena, crt1_reactor_src_file),
                     }),
                     .extra_flags = args.items,
                 },
@@ -90,7 +91,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             return comp.build_crt_file("crt1-command", .Obj, .@"wasi crt1-command.o", prog_node, &.{
                 .{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", try sanitize(arena, crt1_command_src_file),
+                        "libc",
+                        try sanitize(arena, crt1_command_src_file),
                     }),
                     .extra_flags = args.items,
                 },
@@ -106,7 +108,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                 for (emmalloc_src_files) |file_path| {
                     try libc_sources.append(.{
                         .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                            "libc", try sanitize(arena, file_path),
+                            "libc",
+                            try sanitize(arena, file_path),
                         }),
                         .extra_flags = args.items,
                     });
@@ -122,7 +125,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                 for (libc_bottom_half_src_files) |file_path| {
                     try libc_sources.append(.{
                         .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                            "libc", try sanitize(arena, file_path),
+                            "libc",
+                            try sanitize(arena, file_path),
                         }),
                         .extra_flags = args.items,
                     });
@@ -138,7 +142,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                 for (libc_top_half_src_files) |file_path| {
                     try libc_sources.append(.{
                         .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                            "libc", try sanitize(arena, file_path),
+                            "libc",
+                            try sanitize(arena, file_path),
                         }),
                         .extra_flags = args.items,
                     });
@@ -156,7 +161,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             for (emulated_process_clocks_src_files) |file_path| {
                 try emu_clocks_sources.append(.{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", try sanitize(arena, file_path),
+                        "libc",
+                        try sanitize(arena, file_path),
                     }),
                     .extra_flags = args.items,
                 });
@@ -172,7 +178,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             for (emulated_getpid_src_files) |file_path| {
                 try emu_getpid_sources.append(.{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", try sanitize(arena, file_path),
+                        "libc",
+                        try sanitize(arena, file_path),
                     }),
                     .extra_flags = args.items,
                 });
@@ -188,7 +195,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             for (emulated_mman_src_files) |file_path| {
                 try emu_mman_sources.append(.{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", try sanitize(arena, file_path),
+                        "libc",
+                        try sanitize(arena, file_path),
                     }),
                     .extra_flags = args.items,
                 });
@@ -205,7 +213,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                 for (emulated_signal_bottom_half_src_files) |file_path| {
                     try emu_signal_sources.append(.{
                         .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                            "libc", try sanitize(arena, file_path),
+                            "libc",
+                            try sanitize(arena, file_path),
                         }),
                         .extra_flags = args.items,
                     });
@@ -221,7 +230,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                 for (emulated_signal_top_half_src_files) |file_path| {
                     try emu_signal_sources.append(.{
                         .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                            "libc", try sanitize(arena, file_path),
+                            "libc",
+                            try sanitize(arena, file_path),
                         }),
                         .extra_flags = args.items,
                     });

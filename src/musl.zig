@@ -63,7 +63,10 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             return comp.build_crt_file("crt1", .Obj, .@"musl crt1.o", prog_node, &.{
                 .{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", "musl", "crt", "crt1.c",
+                        "libc",
+                        "musl",
+                        "crt",
+                        "crt1.c",
                     }),
                     .extra_flags = args.items,
                 },
@@ -80,7 +83,10 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             return comp.build_crt_file("rcrt1", .Obj, .@"musl rcrt1.o", prog_node, &.{
                 .{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", "musl", "crt", "rcrt1.c",
+                        "libc",
+                        "musl",
+                        "crt",
+                        "rcrt1.c",
                     }),
                     .extra_flags = args.items,
                 },
@@ -97,7 +103,10 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
             return comp.build_crt_file("Scrt1", .Obj, .@"musl Scrt1.o", prog_node, &.{
                 .{
                     .src_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-                        "libc", "musl", "crt", "Scrt1.c",
+                        "libc",
+                        "musl",
+                        "crt",
+                        "Scrt1.c",
                     }),
                     .extra_flags = args.items,
                 },
@@ -155,21 +164,27 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: *std.Progr
                     // Look for an arch specific override.
                     override_path.shrinkRetainingCapacity(0);
                     try override_path.writer().print("{s}" ++ s ++ "{s}" ++ s ++ "{s}.s", .{
-                        dirname, arch_name, noextbasename,
+                        dirname,
+                        arch_name,
+                        noextbasename,
                     });
                     if (source_table.contains(override_path.items))
                         continue;
 
                     override_path.shrinkRetainingCapacity(0);
                     try override_path.writer().print("{s}" ++ s ++ "{s}" ++ s ++ "{s}.S", .{
-                        dirname, arch_name, noextbasename,
+                        dirname,
+                        arch_name,
+                        noextbasename,
                     });
                     if (source_table.contains(override_path.items))
                         continue;
 
                     override_path.shrinkRetainingCapacity(0);
                     try override_path.writer().print("{s}" ++ s ++ "{s}" ++ s ++ "{s}.c", .{
-                        dirname, arch_name, noextbasename,
+                        dirname,
+                        arch_name,
+                        noextbasename,
                     });
                     if (source_table.contains(override_path.items))
                         continue;
@@ -407,7 +422,11 @@ fn addCcArgs(
 fn start_asm_path(comp: *Compilation, arena: Allocator, basename: []const u8) ![]const u8 {
     const target = comp.getTarget();
     return comp.zig_lib_directory.join(arena, &[_][]const u8{
-        "libc", "musl", "crt", archName(target.cpu.arch), basename,
+        "libc",
+        "musl",
+        "crt",
+        archName(target.cpu.arch),
+        basename,
     });
 }
 

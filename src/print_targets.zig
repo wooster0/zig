@@ -72,7 +72,9 @@ pub fn cmdTargets(
     try jws.beginArray();
     for (target.available_libcs) |libc| {
         const tmp = try std.fmt.allocPrint(allocator, "{s}-{s}-{s}", .{
-            @tagName(libc.arch), @tagName(libc.os), @tagName(libc.abi),
+            @tagName(libc.arch),
+            @tagName(libc.os),
+            @tagName(libc.abi),
         });
         defer allocator.free(tmp);
         try jws.arrayElem();

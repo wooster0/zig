@@ -137,8 +137,10 @@ pub fn getFloatArrayType(ty: Type) ?Type {
 }
 
 pub const callee_preserved_regs = [_]Register{
+    // zig fmt: off
     .x19, .x20, .x21, .x22, .x23,
     .x24, .x25, .x26, .x27, .x28,
+    // zig fmt: on
 };
 
 pub const c_abi_int_param_regs = [_]Register{ .x0, .x1, .x2, .x3, .x4, .x5, .x6, .x7 };

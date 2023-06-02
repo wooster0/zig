@@ -292,7 +292,8 @@ const Parse = struct {
         const hex_multihash_len = 2 * Manifest.multihash_len;
         if (h.len != hex_multihash_len) {
             return fail(p, tok, "wrong hash size. expected: {d}, found: {d}", .{
-                hex_multihash_len, h.len,
+                hex_multihash_len,
+                h.len,
             });
         }
 

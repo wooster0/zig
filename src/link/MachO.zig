@@ -352,7 +352,8 @@ pub fn openPath(allocator: Allocator, options: link.Options) !*MachO {
         // Open a temporary object file, not the final output file because we
         // want to link with LLD.
         break :blk try std.fmt.allocPrint(allocator, "{s}{s}", .{
-            emit.sub_path, options.target.ofmt.fileExt(options.target.cpu.arch),
+            emit.sub_path,
+            options.target.ofmt.fileExt(options.target.cpu.arch),
         });
     } else emit.sub_path;
     errdefer if (mode == .zld) allocator.free(sub_path);
@@ -865,7 +866,9 @@ pub fn resolveLibSystem(
             target.os.version_range.semver.min.major,
         });
         const full_path = try comp.zig_lib_directory.join(arena, &[_][]const u8{
-            "libc", "darwin", libsystem_name,
+            "libc",
+            "darwin",
+            libsystem_name,
         });
         try out_libs.put(full_path, .{ .needed = true });
     }
