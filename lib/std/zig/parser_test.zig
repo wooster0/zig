@@ -3296,13 +3296,35 @@ test "zig fmt: enum declaration" {
         \\const Ee = extern enum {
         \\    Ok,
         \\    SomethingElse,
+        \\
         \\    SomethingThird,
         \\};
         \\
         \\const Ep = packed enum {
         \\    Ok,
         \\    SomethingElse,
+        \\
         \\    SomethingThird,
+        \\};
+        \\
+    );
+}
+
+test "zig fmt: enum declaration with newlines" {
+    try testTransform(
+        \\const E = enum {
+        \\
+        \\
+        \\    Ok,
+        \\    SomethingElse = 0,
+        \\
+        \\
+        \\};
+        \\
+    ,
+        \\const E = enum {
+        \\    Ok,
+        \\    SomethingElse = 0,
         \\};
         \\
     );
