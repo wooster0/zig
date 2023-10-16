@@ -41,7 +41,7 @@ pub fn emitMir(emit: *Emit) !void {
 
     for (mir_tags, 0..) |tag, inst| {
         // Emit the opcode.
-        try emit.emitByte(@enumToInt(tag));
+        try emit.emitByte(@intFromEnum(tag));
 
         // Emit the operand, if any.
         const data = emit.mir.instructions.items(.data)[inst];
@@ -65,7 +65,7 @@ fn emitWord(emit: *Emit, word: u16) !void {
     try emit.code.writer().writeIntLittle(u16, word);
 }
 fn getCodeOffset(emit: Emit) u16 {
-    return @intCast(u16, emit.code.items.len);
+    return @as(u16, @intCast(emit.code.items.len));
 }
 
 fn emitImmediate(emit: *Emit, imm: Mir.Inst.Imm) !void {
@@ -146,5 +146,5 @@ fn emitAbsoluteAddress(emit: *Emit, abs_addr: Mir.Inst.Abs) !void {
 }
 
 fn emitRelativeOffset(emit: *Emit, rel: i8) !void {
-    try emit.emitByte(@bitCast(u8, rel));
+    try emit.emitByte(@as(u8, @bitCast(rel)));
 }

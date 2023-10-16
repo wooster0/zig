@@ -317,7 +317,7 @@ pub const Inst = struct {
 
         pub fn takeHalf(unres_addr: UnresAddr, half: enum { low, high }) UnresAddrHalf {
             assert(unres_addr.addend == 0); // We won't need the addend.
-            return .{ .block_index = unres_addr.block_index, .half = @enumToInt(half) };
+            return .{ .block_index = unres_addr.block_index, .half = @intFromEnum(half) };
         }
     };
     /// An unknown low or high byte half of an memory address that is yet to be resolved by the linker.

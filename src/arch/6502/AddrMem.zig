@@ -96,7 +96,7 @@ pub fn isDeallocated(addr_mem: AddrMem, target: std.Target) bool {
 /// Returns the total amount of bytes allocatable.
 pub fn getMax(addr_mem: AddrMem, target: std.Target) u16 {
     _ = addr_mem;
-    return @intCast(u8, abi.getZeroPageAddresses(target).len) +
+    return @as(u8, @intCast(abi.getZeroPageAddresses(target).len)) +
         (abi.getAbsoluteMemoryOffset(target)
     // TODO: - addr_mem.abs_end;
     );
@@ -268,14 +268,14 @@ test allocZeroPageMemory {
     try testing.expectEqual(@as(u8, 0x80), addr_mem.allocZeroPageMemory(1).?);
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(10));
     try testing.expectEqual(@as(u8, 0x90), addr_mem.allocZeroPageMemory(1).?);
-    try testing.expectEqual(@as(u8, 0), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 0), @as(u8, @intCast(addr_mem.zp_free.len)));
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xfe, 0xff });
     try testing.expectEqual(@as(u8, 0xfe), addr_mem.allocZeroPageMemory(1).?);
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(0xff));
     try testing.expectEqual(@as(u8, 0xff), addr_mem.allocZeroPageMemory(1).?);
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(1));
-    try testing.expectEqual(@as(u8, 0), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 0), @as(u8, @intCast(addr_mem.zp_free.len)));
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 2, 4, 6, 8, 10 });
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(2));
@@ -283,12 +283,12 @@ test allocZeroPageMemory {
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(4));
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(5));
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(6));
-    try testing.expectEqual(@as(u8, 6), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 6), @as(u8, @intCast(addr_mem.zp_free.len)));
     addr_mem.zp_free.len = 0;
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFD, 0xFF });
     try testing.expectEqual(@as(?u8, null), addr_mem.allocZeroPageMemory(2));
-    try testing.expectEqual(@as(u8, 2), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 2), @as(u8, @intCast(addr_mem.zp_free.len)));
     addr_mem.zp_free.len = 0;
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0, 2, 4 });
@@ -297,29 +297,29 @@ test allocZeroPageMemory {
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFD, 0xFE, 0xFF });
     try testing.expectEqual(@as(u8, 0xFD), addr_mem.allocZeroPageMemory(3).?);
-    try testing.expectEqual(@as(u8, 0), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 0), @as(u8, @intCast(addr_mem.zp_free.len)));
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFC, 0xFD, 0xFE });
     try testing.expectEqual(@as(u8, 0xFC), addr_mem.allocZeroPageMemory(3).?);
-    try testing.expectEqual(@as(u8, 0), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 0), @as(u8, @intCast(addr_mem.zp_free.len)));
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0xFB, 0xFC, 0xFD, 0xFE });
     try testing.expectEqual(@as(u8, 0xFB), addr_mem.allocZeroPageMemory(3).?);
-    try testing.expectEqual(@as(u8, 1), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 1), @as(u8, @intCast(addr_mem.zp_free.len)));
     addr_mem.zp_free.len = 0;
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 0x02, 0x2A, 0x52, 0xFB, 0xFC, 0xFD, 0xFE });
     try testing.expectEqual(@as(u8, 0xFB), addr_mem.allocZeroPageMemory(3).?);
-    try testing.expectEqual(@as(u8, 4), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 4), @as(u8, @intCast(addr_mem.zp_free.len)));
     addr_mem.zp_free.len = 0;
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 2, 4, 8, 16, 17, 18, 32, 64, 128 });
     try testing.expectEqual(@as(u8, 16), addr_mem.allocZeroPageMemory(3).?);
-    try testing.expectEqual(@as(u8, 6), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 6), @as(u8, @intCast(addr_mem.zp_free.len)));
     addr_mem.zp_free.len = 0;
 
     addr_mem.zp_free.appendSliceAssumeCapacity(&[_]u8{ 2, 42, 82, 253, 254 });
-    try testing.expectEqual(@as(u8, 5), @intCast(u8, addr_mem.zp_free.len));
+    try testing.expectEqual(@as(u8, 5), @as(u8, @intCast(addr_mem.zp_free.len)));
     addr_mem.zp_free.len = 0;
 }
 

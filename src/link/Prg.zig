@@ -191,7 +191,7 @@ pub fn lowerUnnamedConst(
         tv,
         &buf,
         .{ .none = {} },
-        .{ .parent_atom_index = @enumToInt(parent_decl_index) },
+        .{ .parent_atom_index = @intFromEnum(parent_decl_index) },
     );
     var code = switch (res) {
         .ok => try buf.toOwnedSlice(),
@@ -429,14 +429,14 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
                 unres_addr.decl_index == decl_index_and_block.decl_index;
             if (found) {
                 const load_address = prg.getLoadAddress();
-                const current_address = load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
+                const current_address = load_address + @as(u16, @intCast(prg.header.len)) - @sizeOf(@TypeOf(load_address)) + offset;
                 break current_address;
             }
             const code = decl_index_and_block.block.code.?;
             assert(code.len != 0);
-            offset += @intCast(u16, code.len);
+            offset += @as(u16, @intCast(code.len));
         } else unreachable;
-        const addr = @intCast(u16, res_addr + unres_addr.addend);
+        const addr = @as(u16, @intCast(res_addr + unres_addr.addend));
 
         var owner_block = for (decl_index_and_blocks) |decl_index_and_block| {
             if (decl_index_and_block.decl_index == unres_addr.decl_index)
@@ -445,10 +445,10 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
 
         var code = owner_block.code.?[unres_addr.code_offset..];
         if (unres_addr.half) |half| {
-            const addr_halves = @bitCast([2]u8, addr);
+            const addr_halves = @as([2]u8, @bitCast(addr));
             code[0] = addr_halves[half];
         } else {
-            mem.writeIntLittle(u16, @ptrCast(*[2]u8, code[0..2]), addr);
+            mem.writeIntLittle(u16, @as(*[2]u8, @ptrCast(code[0..2])), addr);
         }
     }
 
@@ -460,10 +460,10 @@ pub fn flushModule(prg: *Prg, comp: *Compilation, prog_node: *std.Progress.Node)
         const code = decl_index_and_block.block.code.?;
         assert(code.len != 0);
         const load_address = prg.getLoadAddress();
-        const addr = load_address + @intCast(u16, prg.header.len) - @sizeOf(@TypeOf(load_address)) + offset;
+        const addr = load_address + @as(u16, @intCast(prg.header.len)) - @sizeOf(@TypeOf(load_address)) + offset;
         log.debug("writing block {} of address 0x{X:0>4}", .{ decl_index_and_block.block, addr });
         file_flush.appendBufAssumeCapacity(code);
-        offset += @intCast(u16, code.len);
+        offset += @as(u16, @intCast(code.len));
     }
 
     if (file_flush.file_size > std.math.maxInt(u16)) {
@@ -502,7 +502,7 @@ pub fn updateDecl(prg: *Prg, module: *Module, decl_index: Module.Decl.Index) !vo
         .{ .ty = decl.ty, .val = decl_val },
         &buf,
         .{ .none = {} },
-        .{ .parent_atom_index = @enumToInt(decl_index) },
+        .{ .parent_atom_index = @intFromEnum(decl_index) },
     );
     var code = switch (res) {
         .ok => try buf.toOwnedSlice(),

@@ -603,7 +603,7 @@ fn loadA(func: *Func, val: MV, index: MV) !void {
             .y => try func.addInst(.tya_impl, .{ .none = {} }),
         },
         .zp => |addr| switch (index) {
-            .imm => |imm| try func.addInst(.lda_zp, .{ .zp = addr + @intCast(u8, imm) }),
+            .imm => |imm| try func.addInst(.lda_zp, .{ .zp = addr + @as(u8, @intCast(imm)) }),
             .reg => |reg| switch (reg) {
                 .a => unreachable,
                 .x => {
@@ -663,7 +663,7 @@ fn storeA(func: *Func, val: MV, index: MV) !void {
         .imm => unreachable,
         .reg => unreachable,
         .zp => |addr| switch (index) {
-            .imm => |imm| try func.addInst(.sta_zp, .{ .zp = addr + @intCast(u8, imm) }),
+            .imm => |imm| try func.addInst(.sta_zp, .{ .zp = addr + @as(u8, @intCast(imm)) }),
             .reg => |reg| switch (reg) {
                 .a => unreachable,
                 .x => try func.addInst(.sta_x_zp, .{ .zp = addr }),
@@ -860,7 +860,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.lda_zp, .{ .zp = src_addr + i });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
                 }
@@ -870,7 +870,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.lda_zp, .{ .zp = src_addr + i });
                     try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
                 }
@@ -890,7 +890,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 const save = try func.saveReg(.a);
                 defer save.restore();
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.lda_zp, .{ .zp = src_addr + i });
                     try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
                 }
@@ -912,7 +912,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.lda_abs, .{ .abs = .{ .fixed = src_addr + i } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
                 }
@@ -931,7 +931,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 assert(ty.zigTypeTag() == .Pointer);
                 const save = try func.saveReg(.a);
                 defer save.restore();
-                const addr_halves = @bitCast([2]u8, src_addr);
+                const addr_halves = @as([2]u8, @bitCast(src_addr));
                 // Low byte first.
                 try func.addInst(.lda_imm, .{ .imm = .{ .val = addr_halves[0] } });
                 try func.addInst(.sta_zp, .{ .zp = dst_addr + 0 });
@@ -987,7 +987,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer reg_y_save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                     try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
@@ -1000,7 +1000,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer reg_y_save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                     try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
                     try func.addInst(.sta_abs, .{ .abs = .{ .fixed = dst_addr + i } });
@@ -1022,7 +1022,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer reg_y_save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                     try func.addInst(.lda_ind_y_zp, .{ .zp = src_addr });
                     try func.addInst(.sta_abs, .{ .abs = .{ .unres = dst_unres.index(i) } });
@@ -1045,7 +1045,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                 defer save.restore();
                 // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                 var i: u8 = 0;
-                while (i < @intCast(u8, size)) : (i += 1) {
+                while (i < @as(u8, @intCast(size))) : (i += 1) {
                     try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
                     try func.addInst(.sta_zp, .{ .zp = dst_addr + i });
                 }
@@ -1076,7 +1076,7 @@ fn trans(func: *Func, src: MV, dst: MV, ty: Type) !void {
                     defer reg_y_save.restore();
                     // TODO: do this inlined memcpy at runtime at a certain threshold depending on optimize mode
                     var i: u8 = 0;
-                    while (i < @intCast(u8, size)) : (i += 1) {
+                    while (i < @as(u8, @intCast(size))) : (i += 1) {
                         try func.addInst(.ldy_imm, .{ .imm = .{ .val = i } });
                         try func.addInst(.lda_abs, .{ .abs = .{ .unres = src_unres.index(i) } });
                         try func.addInst(.sta_ind_y_zp, .{ .zp = dst_addr });
@@ -1580,7 +1580,7 @@ fn finishAir(func: *Func, inst: Air.Inst.Index, res: MV, ops: []const Air.Inst.R
     // The LSB is the first operand, and so on, up to `Liveness.bpi - 1` operands.
     var tomb_bits = func.liveness.getTombBits(inst);
     for (ops) |op| {
-        const lives = @truncate(u1, tomb_bits) == 0;
+        const lives = @as(u1, @truncate(tomb_bits)) == 0;
         tomb_bits >>= 1;
         if (lives) continue;
         const op_i = Air.refToIndex(op) orelse
@@ -1590,10 +1590,10 @@ fn finishAir(func: *Func, inst: Air.Inst.Index, res: MV, ops: []const Air.Inst.R
     }
 
     // Shift more if we have not shifted enough yet.
-    tomb_bits >>= @intCast(u2, (Liveness.bpi - 1) - ops.len);
+    tomb_bits >>= @as(u2, @intCast((Liveness.bpi - 1) - ops.len));
 
     // The MSB is whether the instruction is unreferenced.
-    const is_used = @truncate(u1, tomb_bits) == 0;
+    const is_used = @as(u1, @truncate(tomb_bits)) == 0;
     if (is_used) {
         log.debug("%{} = {}", .{ inst, res });
         func.getCurrentBranch().inst_vals.putAssumeCapacityNoClobber(inst, res);
@@ -1608,7 +1608,7 @@ fn finishAirBookkeeping(func: *Func) void {
 
 fn resolveInst(func: *Func, inst: Air.Inst.Ref) !MV {
     // The first section of indexes correspond to a set number of constant values.
-    const ref_int = @enumToInt(inst);
+    const ref_int = @intFromEnum(inst);
     if (ref_int < Air.Inst.Ref.typed_value_map.len) {
         const tv = Air.Inst.Ref.typed_value_map[ref_int];
         if (!tv.ty.hasRuntimeBitsIgnoreComptime()) {
@@ -1622,7 +1622,7 @@ fn resolveInst(func: *Func, inst: Air.Inst.Ref) !MV {
     if (!inst_ty.hasRuntimeBitsIgnoreComptime())
         return MV{ .none = {} };
 
-    const inst_index = @intCast(Air.Inst.Index, ref_int - Air.Inst.Ref.typed_value_map.len);
+    const inst_index = @as(Air.Inst.Index, @intCast(ref_int - Air.Inst.Ref.typed_value_map.len));
     switch (func.air.instructions.items(.tag)[inst_index]) {
         .constant => {
             // Constants have static lifetimes, so they are always memoized in the outer most table.
@@ -1663,12 +1663,12 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
             const int_info = ty.intInfo(target);
             if (int_info.bits <= 8) {
                 switch (int_info.signedness) {
-                    .signed => return MV{ .imm = @bitCast(u8, @intCast(i8, val.toSignedInt(target))) },
-                    .unsigned => return MV{ .imm = @intCast(u8, val.toUnsignedInt(target)) },
+                    .signed => return MV{ .imm = @as(u8, @bitCast(@as(i8, @intCast(val.toSignedInt(target))))) },
+                    .unsigned => return MV{ .imm = @as(u8, @intCast(val.toUnsignedInt(target))) },
                 }
             }
         },
-        .Bool => return MV{ .imm = @boolToInt(val.toBool()) },
+        .Bool => return MV{ .imm = @intFromBool(val.toBool()) },
         .Pointer => switch (ty.ptrSize()) {
             .Slice => {},
             else => switch (val.tag()) {
@@ -1677,7 +1677,7 @@ fn lowerConstant(func: *Func, const_val: Value, ty: Type) !MV {
                     if (std.math.cast(u8, addr)) |zp_addr|
                         return MV{ .zp = zp_addr }
                     else
-                        return MV{ .abs = @intCast(u16, addr) };
+                        return MV{ .abs = @as(u16, @intCast(addr)) };
                 },
                 else => {},
             },
@@ -1740,7 +1740,7 @@ fn lowerUnnamedConst(func: *Func, val: Value, ty: Type) !MV {
         return func.fail("failed lowering unnamed constant: {}", .{err});
     };
     if (func.bin_file.cast(link.File.Prg)) |_| {
-        const block_index = @intCast(u16, symbol_index);
+        const block_index = @as(u16, @intCast(symbol_index));
         return MV{ .abs_unres = .{ .block_index = block_index } };
     } else unreachable;
 }
@@ -1812,7 +1812,7 @@ pub fn addInst(func: *Func, tag: Mir.Inst.Tag, data: Mir.Inst.Data) !void {
 }
 /// Returns the index of the last MIR instruction added.
 fn getPreviousInst(func: *Func) Mir.Inst.Index {
-    return @intCast(Mir.Inst.Index, func.mir_instructions.len - 1);
+    return @as(Mir.Inst.Index, @intCast(func.mir_instructions.len - 1));
 }
 /// Returns the code size of this function up to this point.
 // TODO: rename getSize to getTypeSize or getSizeOf and getLength to getCodeSize
@@ -1949,7 +1949,7 @@ fn intAddOrSub(
                     } else {
                         // Get either of LHS or RHS in the accumulator.
                         maybe_reg_a = try func.freeReg(.a, null);
-                        try func.loadA(lhs, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
+                        try func.loadA(lhs, .{ .imm = @as(u8, @intCast(i)) }); // TODO: dont inline if > $FF
                         break :other rhs;
                     }
                 };
@@ -1977,7 +1977,7 @@ fn intAddOrSub(
                 if (maybe_dst == null)
                     maybe_dst = try func.allocAddrMem(ty);
                 const dst = maybe_dst.?;
-                try func.storeA(dst, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
+                try func.storeA(dst, .{ .imm = @as(u8, @intCast(i)) }); // TODO: dont inline if > $FF
             }
             if (op == .add_sat) {
                 // NOTE: this is best implemented after implementing some basic branching stuff.
@@ -2047,7 +2047,7 @@ fn intAddOrSub(
                         .a,
                         null, // We won't take ownership of the register yet in case the result won't go in the register.
                     );
-                    try func.loadA(lhs, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
+                    try func.loadA(lhs, .{ .imm = @as(u8, @intCast(i)) }); // TODO: dont inline if > $FF
                 }
 
                 // Now subtract LHS from LHS with a possible borrow.
@@ -2072,7 +2072,7 @@ fn intAddOrSub(
                 if (maybe_dst == null)
                     maybe_dst = try func.allocAddrMem(ty);
                 const dst = maybe_dst.?;
-                try func.storeA(dst, .{ .imm = @intCast(u8, i) }); // TODO: dont inline if > $FF
+                try func.storeA(dst, .{ .imm = @as(u8, @intCast(i)) }); // TODO: dont inline if > $FF
             }
             if (op == .sub_sat) {
                 // NOTE: this is best implemented after implementing some basic branching stuff.
@@ -2148,7 +2148,7 @@ fn elemOffset(func: *Func, index: MV, index_ty: Type, elem_size: u16) !MV {
             if (elem_size < 255)
                 // TODO: shouldn't this work for indexes > 255 too (max u16)?
                 //       introduce MV.index or MV.index_imm just for this and lower it in lowerConstant
-                return MV{ .imm = imm * @intCast(u8, elem_size) };
+                return MV{ .imm = imm * @as(u8, @intCast(elem_size)) };
             return func.fail("TODO: implement indexing pointers with elements of sizes > 1 with immediate index > 255", .{});
         },
         else => {
@@ -2195,7 +2195,7 @@ fn bitwise(
     var i: u16 = 0;
     while (true) {
         const index: MV = switch (loop_type) {
-            .inlined => .{ .imm = @intCast(u8, i) },
+            .inlined => .{ .imm = @as(u8, @intCast(i)) },
             .runtime => index: {
                 if (size <= 0xFF) {
                     const index = if (func.isRegFree(.x))
@@ -2285,7 +2285,7 @@ fn bitwise(
                     .none => unreachable,
                     .imm => unreachable,
                     .reg => unreachable,
-                    .zp => |addr| .{ .zp = addr + @intCast(u8, i) },
+                    .zp => |addr| .{ .zp = addr + @as(u8, @intCast(i)) },
                     .abs => |addr| .{ .abs = addr + i },
                     .zp_abs => unreachable, // TODO
                     .abs_unres => unreachable, // TODO
@@ -2317,8 +2317,8 @@ fn bitwise(
             .imm => if (i != size) continue,
             .reg => |reg| switch (reg) {
                 .a => unreachable,
-                .x => try func.addInst(.cpx_imm, .{ .imm = .{ .val = @intCast(u8, size) } }),
-                .y => try func.addInst(.cpy_imm, .{ .imm = .{ .val = @intCast(u8, size) } }),
+                .x => try func.addInst(.cpx_imm, .{ .imm = .{ .val = @as(u8, @intCast(size)) } }),
+                .y => try func.addInst(.cpy_imm, .{ .imm = .{ .val = @as(u8, @intCast(size)) } }),
             },
             else => unreachable, // TODO: use CMP for addr mem here
         }
@@ -2369,7 +2369,7 @@ fn genBody(func: *Func, body: []const Air.Inst.Index) !void {
             func.air_current_inst = air_inst;
         }
 
-        var i = @intCast(u16, func.mir_instructions.len);
+        var i = @as(u16, @intCast(func.mir_instructions.len));
 
         try func.genInst(air_inst);
 
@@ -2756,10 +2756,10 @@ fn airAsm(func: *Func, inst: Air.Inst.Index) !void {
     assert(res_ty.tag() == .void);
     const extra = func.air.extraData(Air.Asm, ty_pl.payload);
     var extra_i = extra.end;
-    const outputs = @ptrCast([]const Air.Inst.Ref, func.air.extra[extra_i..][0..extra.data.outputs_len]);
+    const outputs = @as([]const Air.Inst.Ref, @ptrCast(func.air.extra[extra_i..][0..extra.data.outputs_len]));
     assert(outputs.len == 0); // TODO: support outputting specific registers into variables (so, the other way around)
     extra_i += outputs.len;
-    const inputs = @ptrCast([]const Air.Inst.Ref, func.air.extra[extra_i..][0..extra.data.inputs_len]);
+    const inputs = @as([]const Air.Inst.Ref, @ptrCast(func.air.extra[extra_i..][0..extra.data.inputs_len]));
     extra_i += inputs.len;
 
     assert(extra.data.clobbers_len() == 0); // TODO
@@ -2976,7 +2976,7 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
 
     const pl_op = func.air.instructions.items(.data)[inst].pl_op;
     const extra = func.air.extraData(Air.Call, pl_op.payload);
-    const args = @ptrCast([]const Air.Inst.Ref, func.air.extra[extra.end..][0..extra.data.args_len]);
+    const args = @as([]const Air.Inst.Ref, @ptrCast(func.air.extra[extra.end..][0..extra.data.args_len]));
     const callee = pl_op.operand;
     const callee_ty = func.air.typeOf(callee);
 
@@ -3016,7 +3016,7 @@ fn airCall(func: *Func, inst: Air.Inst.Index, modifier: std.builtin.CallModifier
         } else if (fn_val.castTag(.decl_ref)) |_| {
             return func.fail("TODO implement calling bitcasted functions", .{});
         } else if (fn_val.castTag(.int_u64)) |int| {
-            try func.addInst(.jsr_abs, .{ .abs = .{ .fixed = @intCast(u16, int.data) } });
+            try func.addInst(.jsr_abs, .{ .abs = .{ .fixed = @as(u16, @intCast(int.data)) } });
         } else unreachable;
     } else {
         assert(callee_ty.zigTypeTag() == .Pointer);
