@@ -1,8 +1,7 @@
 const std = @import("std");
 
-pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    _ = stack_trace;
-    if (std.mem.eql(u8, message, "start index 10 is larger than end index 1")) {
+pub fn panic(cause: std.builtin.PanicCause, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    if (cause == .start_index_greater_than_end and cause.start_index_greater_than_end.start == 10 and cause.start_index_greater_than_end.end == 1) {
         std.process.exit(0);
     }
     std.process.exit(1);

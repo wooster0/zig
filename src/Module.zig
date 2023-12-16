@@ -168,40 +168,10 @@ reference_table: std.AutoHashMapUnmanaged(Decl.Index, struct {
     src: LazySrcLoc,
 }) = .{},
 
-panic_messages: [PanicId.len]Decl.OptionalIndex = .{.none} ** PanicId.len,
 /// The panic function body.
 panic_func_index: InternPool.Index = .none,
 null_stack_trace: InternPool.Index = .none,
 
-pub const PanicId = enum {
-    unreach,
-    unwrap_null,
-    cast_to_null,
-    incorrect_alignment,
-    invalid_error_code,
-    cast_truncated_data,
-    negative_to_unsigned,
-    integer_overflow,
-    shl_overflow,
-    shr_overflow,
-    divide_by_zero,
-    exact_division_remainder,
-    inactive_union_field,
-    integer_part_out_of_bounds,
-    corrupt_switch,
-    shift_rhs_too_big,
-    invalid_enum_value,
-    sentinel_mismatch,
-    unwrap_error,
-    index_out_of_bounds,
-    start_index_greater_than_end,
-    for_len_mismatch,
-    memcpy_len_mismatch,
-    memcpy_alias,
-    noreturn_returned,
-
-    pub const len = @typeInfo(PanicId).Enum.fields.len;
-};
 
 pub const GlobalErrorSet = std.AutoArrayHashMapUnmanaged(InternPool.NullTerminatedString, void);
 
@@ -5614,7 +5584,6 @@ pub fn getDeclExports(mod: Module, decl_index: Decl.Index) []const *Export {
 pub const Feature = enum {
     panic_fn,
     panic_unwrap_error,
-    safety_check_formatted,
     error_return_trace,
     is_named_enum_value,
     error_set_has_value,
@@ -5635,8 +5604,6 @@ pub fn backendSupportsFeature(mod: Module, feature: Feature) bool {
             mod.comp.bin_file.options.use_llvm or
             mod.comp.bin_file.options.target.cpu.arch == .x86_64,
         .panic_unwrap_error => mod.comp.bin_file.options.target.ofmt == .c or
-            mod.comp.bin_file.options.use_llvm,
-        .safety_check_formatted => mod.comp.bin_file.options.target.ofmt == .c or
             mod.comp.bin_file.options.use_llvm,
         .error_return_trace => mod.comp.bin_file.options.use_llvm,
         .is_named_enum_value => mod.comp.bin_file.options.use_llvm,

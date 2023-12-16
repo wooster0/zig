@@ -68,15 +68,63 @@ pub const want_sparc_abi = builtin.cpu.arch.isSPARC();
 
 // Avoid dragging in the runtime safety mechanisms into this .o file,
 // unless we're trying to test compiler-rt.
-pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    _ = error_return_trace;
+pub fn panic(cause: std.builtin.PanicCause, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (builtin.is_test) {
         @setCold(true);
-        std.debug.panic("{s}", .{msg});
+        std.debug.panic("{any}", .{cause}); // TODO
     } else {
         unreachable;
     }
 }
+
+//// TODO: later use std.builtin.PanicCause
+///// This data structure is used by the Zig language code generation and
+///// therefore must be kept in sync with the compiler implementation.
+//pub const PanicCause = union(enum) {
+//    msg: []const u8,
+//    unreach,
+//    unwrap_null,
+//    cast_to_null,
+//    incorrect_alignment,
+//    invalid_error_code,
+//    cast_truncated_data,
+//    negative_to_unsigned,
+//    integer_overflow,
+//    shl_overflow,
+//    shr_overflow,
+//    div_by_zero,
+//    exact_div_remainder,
+//    inactive_union_field: struct {
+//        active: []const u8,
+//        accessed: []const u8,
+//    },
+//    integer_part_out_of_bounds,
+//    corrupt_switch,
+//    shift_rhs_too_big,
+//    invalid_enum_value,
+//    sentinel_mismatch_usize: struct {
+//        expected: usize,
+//        actual: usize,
+//    },
+//    sentinel_mismatch_isize: struct {
+//        expected: isize,
+//        actual: isize,
+//    },
+//    sentinel_mismatch_other,
+//    unwrap_error: anyerror,
+//    index_out_of_bounds: struct {
+//        index: usize,
+//        len: usize,
+//    },
+//    start_index_greater_than_end: struct {
+//        start: usize,
+//        end: usize,
+//    },
+//    for_len_mismatch,
+//    memcpy_len_mismatch,
+//    memcpy_alias,
+//    noreturn_fn_returned,
+//};
 
 /// AArch64 is the only ABI (at the moment) to support f16 arguments without the
 /// need for extending them to wider fp types.

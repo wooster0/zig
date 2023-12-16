@@ -778,7 +778,7 @@ pub const Block = struct {
 
     fn addUnreachable(block: *Block, src: LazySrcLoc, safety_check: bool) !void {
         if (safety_check and block.wantSafety()) {
-            try block.sema.safetyPanic(block, src, .unreach);
+            try block.sema.addSafetyPanic(block, src, .unreach);
         } else {
             _ = try block.addNoOp(.unreach);
         }
@@ -5606,7 +5606,7 @@ fn zirPanic(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Zir.I
     if (block.is_comptime) {
         return sema.fail(block, src, "encountered @panic at comptime", .{});
     }
-    try sema.panicWithMsg(block, src, msg_inst, .@"@panic");
+    try sema.addPanic(block, src, .msg, msg_inst, null, null, null, .@"@panic");
     return always_noreturn;
 }
 
@@ -7594,7 +7594,7 @@ fn analyzeCall(
                     else => {},
                 }
             }
-            try sema.safetyPanic(block, call_src, .noreturn_returned);
+            try sema.addSafetyPanic(block, call_src, .noreturn_fn_returned);
             return .unreachable_value;
         }
         if (func_ty_info.return_type == .noreturn_type) {
@@ -8226,6 +8226,7 @@ fn zirArrayTypeSentinel(sema: *Sema, block: *Block, inst: Zir.Inst.Index) Compil
     const tracy = trace(@src());
     defer tracy.end();
 
+    const mod = sema.mod;
     const inst_data = sema.code.instructions.items(.data)[@intFromEnum(inst)].pl_node;
     const extra = sema.code.extraData(Zir.Inst.ArrayTypeSentinel, inst_data.payload_index).data;
     const len_src: LazySrcLoc = .{ .node_offset_array_type_len = inst_data.src_node };
@@ -8236,12 +8237,16 @@ fn zirArrayTypeSentinel(sema: *Sema, block: *Block, inst: Zir.Inst.Index) Compil
     });
     const elem_type = try sema.resolveType(block, elem_src, extra.elem_type);
     try sema.validateArrayElemType(block, elem_type, elem_src);
+    const sentinel_ty = elem_type;
+    if (sentinel_ty.zigTypeTag(mod) == .Vector or !sentinel_ty.isSelfComparable(mod, true)) {
+        return sema.fail(block, sentinel_src, "non-scalar sentinel '{}' not allowed", .{sentinel_ty.fmt(mod)});
+    }
     const uncasted_sentinel = try sema.resolveInst(extra.sentinel);
-    const sentinel = try sema.coerce(block, elem_type, uncasted_sentinel, sentinel_src);
+    const sentinel = try sema.coerce(block, sentinel_ty, uncasted_sentinel, sentinel_src);
     const sentinel_val = try sema.resolveConstDefinedValue(block, sentinel_src, sentinel, .{
         .needed_comptime_reason = "array sentinel value must be comptime-known",
     });
-    const array_ty = try sema.mod.arrayType(.{
+    const array_ty = try mod.arrayType(.{
         .len = len,
         .sentinel = sentinel_val.toIntern(),
         .child = elem_type.toIntern(),
@@ -12527,7 +12532,7 @@ fn zirSwitchBlock(sema: *Sema, block: *Block, inst: Zir.Inst.Index, operand_is_r
             // that it is unreachable.
             if (case_block.wantSafety()) {
                 try sema.zirDbgStmt(&case_block, cond_dbg_node_index);
-                try sema.safetyPanic(&case_block, src, .corrupt_switch);
+                try sema.addSafetyPanic(&case_block, src, .corrupt_switch);
             } else {
                 _ = try case_block.addNoOp(.unreach);
             }
@@ -12908,25 +12913,15 @@ fn maybeErrorUnwrap(sema: *Sema, block: *Block, body: []const Zir.Inst.Index, op
             .as_node => try sema.zirAsNode(block, inst),
             .field_val => try sema.zirFieldVal(block, inst),
             .@"unreachable" => {
-                if (!mod.comp.formatted_panics) {
-                    try sema.safetyPanic(block, operand_src, .unwrap_error);
-                    return true;
-                }
-
-                const panic_fn = try sema.getBuiltin("panicUnwrapError");
                 const err_return_trace = try sema.getErrorReturnTrace(block);
-                const args: [2]Air.Inst.Ref = .{ err_return_trace, operand };
-                try sema.callBuiltin(block, operand_src, panic_fn, .auto, &args, .@"safety check");
+                try sema.addPanic(block, operand_src, .unwrap_error, operand, null, err_return_trace, null, .@"safety check");
                 return true;
             },
             .panic => {
                 const inst_data = sema.code.instructions.items(.data)[@intFromEnum(inst)].un_node;
                 const msg_inst = try sema.resolveInst(inst_data.operand);
-
-                const panic_fn = try sema.getBuiltin("panic");
                 const err_return_trace = try sema.getErrorReturnTrace(block);
-                const args: [3]Air.Inst.Ref = .{ msg_inst, err_return_trace, .null_value };
-                try sema.callBuiltin(block, operand_src, panic_fn, .auto, &args, .@"safety check");
+                try sema.addPanic(block, operand_src, .unwrap_error, msg_inst, null, err_return_trace, null, .@"safety check");
                 return true;
             },
             else => unreachable,
@@ -14574,7 +14569,7 @@ fn zirDivExact(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Ai
                 break :ok is_in_range;
             }
         };
-        try sema.addSafetyCheck(block, src, ok, .exact_division_remainder);
+        try sema.addSafetyCheck(block, src, ok, .exact_div_remainder);
         return result;
     }
 
@@ -14923,7 +14918,7 @@ fn addDivByZeroSafety(
         const zero = Air.internedToRef(scalar_zero.toIntern());
         break :ok try block.addBinOp(if (is_int) .cmp_neq else .cmp_neq_optimized, casted_rhs, zero);
     };
-    try sema.addSafetyCheck(block, src, ok, .divide_by_zero);
+    try sema.addSafetyCheck(block, src, ok, .div_by_zero);
 }
 
 fn airTag(block: *Block, is_int: bool, normal: Air.Inst.Tag, optimized: Air.Inst.Tag) Air.Inst.Tag {
@@ -15989,7 +15984,6 @@ fn analyzeArithmetic(
     try sema.requireRuntimeBlock(block, src, runtime_src);
     if (block.wantSafety() and want_safety and scalar_tag == .Int) {
         if (mod.backendSupportsFeature(.safety_checked_instructions)) {
-            _ = try sema.preparePanicId(block, .integer_overflow);
             return block.addBinOp(air_tag_safe, casted_lhs, casted_rhs);
         } else {
             const maybe_op_ov: ?Air.Inst.Tag = switch (air_tag) {
@@ -18931,7 +18925,11 @@ fn zirPtrType(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Air
     const sentinel = if (inst_data.flags.has_sentinel) blk: {
         const ref: Zir.Inst.Ref = @enumFromInt(sema.code.extra[extra_i]);
         extra_i += 1;
-        const coerced = try sema.coerce(block, elem_ty, try sema.resolveInst(ref), sentinel_src);
+        const sentinel_ty = elem_ty;
+        if (sentinel_ty.zigTypeTag(mod) == .Vector or !sentinel_ty.isSelfComparable(mod, true)) {
+            return sema.fail(block, sentinel_src, "non-scalar sentinel '{}' not allowed", .{sentinel_ty.fmt(mod)});
+        }
+        const coerced = try sema.coerce(block, sentinel_ty, try sema.resolveInst(ref), sentinel_src);
         const val = try sema.resolveConstDefinedValue(block, sentinel_src, coerced, .{
             .needed_comptime_reason = "pointer sentinel value must be comptime-known",
         });
@@ -19183,6 +19181,7 @@ fn unionInit(
     }
 
     try sema.requireRuntimeBlock(block, init_src, null);
+    // TODO: delete this parameter?
     _ = union_ty_src;
     try sema.queueFullTypeResolution(union_ty);
     return block.addUnionInit(union_ty, field_index, init);
@@ -25784,34 +25783,12 @@ fn prepareSimplePanic(sema: *Sema, block: *Block) !void {
     }
 }
 
-/// Backends depend on panic decls being available when lowering safety-checked
-/// instructions. This function ensures the panic function will be available to
-/// be called during that time.
-fn preparePanicId(sema: *Sema, block: *Block, panic_id: Module.PanicId) !InternPool.DeclIndex {
-    const mod = sema.mod;
-    const gpa = sema.gpa;
-    if (mod.panic_messages[@intFromEnum(panic_id)].unwrap()) |x| return x;
-
-    try sema.prepareSimplePanic(block);
-
-    const panic_messages_ty = try sema.getBuiltinType("panic_messages");
-    const msg_decl_index = (try sema.namespaceLookup(
-        block,
-        sema.src,
-        panic_messages_ty.getNamespaceIndex(mod).unwrap().?,
-        try mod.intern_pool.getOrPutString(gpa, @tagName(panic_id)),
-    )).?;
-    try sema.ensureDeclAnalyzed(msg_decl_index);
-    mod.panic_messages[@intFromEnum(panic_id)] = msg_decl_index.toOptional();
-    return msg_decl_index;
-}
-
 fn addSafetyCheck(
     sema: *Sema,
     parent_block: *Block,
     src: LazySrcLoc,
     ok: Air.Inst.Ref,
-    panic_id: Module.PanicId,
+    cause: @typeInfo(std.builtin.PanicCause).Union.tag_type.?,
 ) !void {
     const gpa = sema.gpa;
     assert(!parent_block.is_comptime);
@@ -25829,7 +25806,7 @@ fn addSafetyCheck(
 
     defer fail_block.instructions.deinit(gpa);
 
-    try sema.safetyPanic(&fail_block, src, panic_id);
+    try sema.addSafetyPanic(&fail_block, src, cause);
     try sema.addSafetyCheckExtra(parent_block, ok, &fail_block);
 }
 
@@ -25888,8 +25865,19 @@ fn addSafetyCheckExtra(
     parent_block.instructions.appendAssumeCapacity(block_inst);
 }
 
-fn panicWithMsg(sema: *Sema, block: *Block, src: LazySrcLoc, msg_inst: Air.Inst.Ref, operation: CallOperation) !void {
+fn addPanic(
+    sema: *Sema,
+    block: *Block,
+    src: LazySrcLoc,
+    cause: @typeInfo(std.builtin.PanicCause).Union.tag_type.?,
+    arg1: ?Air.Inst.Ref,
+    arg2: ?Air.Inst.Ref,
+    error_return_trace: ?Air.Inst.Ref,
+    ret_addr: ?Air.Inst.Ref,
+    operation: CallOperation,
+) !void {
     const mod = sema.mod;
+    const ip = &mod.intern_pool;
 
     if (!mod.backendSupportsFeature(.panic_fn)) {
         _ = try block.addNoOp(.trap);
@@ -25900,14 +25888,38 @@ fn panicWithMsg(sema: *Sema, block: *Block, src: LazySrcLoc, msg_inst: Air.Inst.
 
     const panic_func = mod.funcInfo(mod.panic_func_index);
     const panic_fn = try sema.analyzeDeclVal(block, src, panic_func.owner_decl);
+    const panic_cause_ty = try sema.getBuiltinType("PanicCause");
+    const field_name = try ip.getOrPutString(sema.gpa, @tagName(cause));
+    const init = if (arg2 != null) init: {
+        const union_obj = mod.typeToUnion(panic_cause_ty).?;
+        const field_index = union_obj.nameIndex(ip, field_name).?;
+        const union_field_ty = panic_cause_ty.structFieldType(field_index, mod);
+        break :init try sema.finishStructInit(
+            block,
+            undefined,
+            undefined,
+            @constCast(&[_]Air.Inst.Ref{ arg1.?, arg2.? }),
+            union_field_ty,
+            union_field_ty,
+            false,
+        );
+    } else arg1 orelse .void_value;
+    const panic_cause = try sema.unionInit(
+        block,
+        init,
+        undefined,
+        panic_cause_ty,
+        undefined,
+        field_name,
+        undefined,
+    );
     const null_stack_trace = Air.internedToRef(mod.null_stack_trace);
-
     const opt_usize_ty = try mod.optionalType(.usize_type);
     const null_ret_addr = Air.internedToRef((try mod.intern(.{ .opt = .{
         .ty = opt_usize_ty.toIntern(),
         .val = .none,
     } })));
-    try sema.callBuiltin(block, src, panic_fn, .auto, &.{ msg_inst, null_stack_trace, null_ret_addr }, operation);
+    try sema.callBuiltin(block, src, panic_fn, .auto, &.{ panic_cause, error_return_trace orelse null_stack_trace, ret_addr orelse null_ret_addr }, operation);
 }
 
 fn panicUnwrapError(
@@ -25920,9 +25932,6 @@ fn panicUnwrapError(
 ) !void {
     assert(!parent_block.is_comptime);
     const ok = try parent_block.addUnOp(is_non_err_tag, operand);
-    if (!sema.mod.comp.formatted_panics) {
-        return sema.addSafetyCheck(parent_block, src, ok, .unwrap_error);
-    }
     const gpa = sema.gpa;
 
     var fail_block: Block = .{
@@ -25942,11 +25951,9 @@ fn panicUnwrapError(
         if (!sema.mod.backendSupportsFeature(.panic_unwrap_error)) {
             _ = try fail_block.addNoOp(.trap);
         } else {
-            const panic_fn = try sema.getBuiltin("panicUnwrapError");
             const err = try fail_block.addTyOp(unwrap_err_tag, Type.anyerror, operand);
             const err_return_trace = try sema.getErrorReturnTrace(&fail_block);
-            const args: [2]Air.Inst.Ref = .{ err_return_trace, err };
-            try sema.callBuiltin(&fail_block, src, panic_fn, .auto, &args, .@"safety check");
+            try sema.addPanic(&fail_block, src, .unwrap_error, err, null, err_return_trace, null, .@"safety check");
         }
     }
     try sema.addSafetyCheckExtra(parent_block, ok, &fail_block);
@@ -25962,10 +25969,7 @@ fn panicIndexOutOfBounds(
 ) !void {
     assert(!parent_block.is_comptime);
     const ok = try parent_block.addBinOp(cmp_op, index, len);
-    if (!sema.mod.comp.formatted_panics) {
-        return sema.addSafetyCheck(parent_block, src, ok, .index_out_of_bounds);
-    }
-    try sema.safetyCheckFormatted(parent_block, src, ok, "panicOutOfBounds", &.{ index, len });
+    try sema.addSafetyCheckWithArgs(parent_block, src, ok, .index_out_of_bounds, index, len);
 }
 
 fn panicInactiveUnionField(
@@ -25977,10 +25981,9 @@ fn panicInactiveUnionField(
 ) !void {
     assert(!parent_block.is_comptime);
     const ok = try parent_block.addBinOp(.cmp_eq, active_tag, wanted_tag);
-    if (!sema.mod.comp.formatted_panics) {
-        return sema.addSafetyCheck(parent_block, src, ok, .inactive_union_field);
-    }
-    try sema.safetyCheckFormatted(parent_block, src, ok, "panicInactiveUnionField", &.{ active_tag, wanted_tag });
+    const active_tag_name = try parent_block.addUnOp(.tag_name, active_tag);
+    const wanted_tag_name = try parent_block.addUnOp(.tag_name, wanted_tag);
+    try sema.addSafetyCheckWithArgs(parent_block, src, ok, .inactive_union_field, active_tag_name, wanted_tag_name);
 }
 
 fn panicSentinelMismatch(
@@ -26006,40 +26009,27 @@ fn panicSentinelMismatch(
         break :blk try parent_block.addTyOp(.load, sentinel_ty, sentinel_ptr);
     };
 
-    const ok = if (sentinel_ty.zigTypeTag(mod) == .Vector) ok: {
-        const eql =
-            try parent_block.addCmpVector(expected_sentinel, actual_sentinel, .eq);
-        break :ok try parent_block.addInst(.{
-            .tag = .reduce,
-            .data = .{ .reduce = .{
-                .operand = eql,
-                .operation = .And,
-            } },
-        });
-    } else if (sentinel_ty.isSelfComparable(mod, true))
-        try parent_block.addBinOp(.cmp_eq, expected_sentinel, actual_sentinel)
-    else {
-        const panic_fn = try sema.getBuiltin("checkNonScalarSentinel");
-        const args: [2]Air.Inst.Ref = .{ expected_sentinel, actual_sentinel };
-        try sema.callBuiltin(parent_block, src, panic_fn, .auto, &args, .@"safety check");
-        return;
-    };
-
-    if (!sema.mod.comp.formatted_panics) {
-        return sema.addSafetyCheck(parent_block, src, ok, .sentinel_mismatch);
+    const ok = try parent_block.addBinOp(.cmp_eq, expected_sentinel, actual_sentinel);
+    const usize_type_size = (Type{ .ip_index = .usize_type }).abiSize(mod);
+    if (sentinel_ty.abiSize(mod) <= usize_type_size) {
+        if (sentinel_ty.isSignedInt(mod)) {
+            return sema.addSafetyCheckWithArgs(parent_block, src, ok, .sentinel_mismatch_isize, expected_sentinel, actual_sentinel);
+        } else {
+            return sema.addSafetyCheckWithArgs(parent_block, src, ok, .sentinel_mismatch_usize, expected_sentinel, actual_sentinel);
+        }
     }
-    try sema.safetyCheckFormatted(parent_block, src, ok, "panicSentinelMismatch", &.{ expected_sentinel, actual_sentinel });
+    return sema.addSafetyCheckWithArgs(parent_block, src, ok, .sentinel_mismatch_other, null, null);
 }
 
-fn safetyCheckFormatted(
+fn addSafetyCheckWithArgs(
     sema: *Sema,
     parent_block: *Block,
     src: LazySrcLoc,
     ok: Air.Inst.Ref,
-    func: []const u8,
-    args: []const Air.Inst.Ref,
+    cause: @typeInfo(std.builtin.PanicCause).Union.tag_type.?,
+    arg1: ?Air.Inst.Ref,
+    arg2: ?Air.Inst.Ref,
 ) CompileError!void {
-    assert(sema.mod.comp.formatted_panics);
     const gpa = sema.gpa;
 
     var fail_block: Block = .{
@@ -26055,19 +26045,12 @@ fn safetyCheckFormatted(
 
     defer fail_block.instructions.deinit(gpa);
 
-    if (!sema.mod.backendSupportsFeature(.safety_check_formatted)) {
-        _ = try fail_block.addNoOp(.trap);
-    } else {
-        const panic_fn = try sema.getBuiltin(func);
-        try sema.callBuiltin(&fail_block, src, panic_fn, .auto, args, .@"safety check");
-    }
+    try sema.addPanic(&fail_block, src, cause, arg1, arg2, null, null, .@"safety check");
     try sema.addSafetyCheckExtra(parent_block, ok, &fail_block);
 }
 
-fn safetyPanic(sema: *Sema, block: *Block, src: LazySrcLoc, panic_id: Module.PanicId) CompileError!void {
-    const msg_decl_index = try sema.preparePanicId(block, panic_id);
-    const msg_inst = try sema.analyzeDeclVal(block, src, msg_decl_index);
-    try sema.panicWithMsg(block, src, msg_inst, .@"safety check");
+fn addSafetyPanic(sema: *Sema, block: *Block, src: LazySrcLoc, cause: @typeInfo(std.builtin.PanicCause).Union.tag_type.?) CompileError!void {
+    try sema.addPanic(block, src, cause, null, null, null, null, .@"safety check");
 }
 
 fn emitBackwardBranch(sema: *Sema, block: *Block, src: LazySrcLoc) !void {
@@ -32253,9 +32236,13 @@ fn analyzeSlice(
 
     const sentinel = s: {
         if (sentinel_opt != .none) {
-            const casted = try sema.coerce(block, elem_ty, sentinel_opt, sentinel_src);
+            const sentinel_ty = elem_ty;
+            if (sentinel_ty.zigTypeTag(mod) == .Vector or !sentinel_ty.isSelfComparable(mod, true)) {
+                return sema.fail(block, sentinel_src, "non-scalar sentinel '{}' not allowed", .{sentinel_ty.fmt(mod)});
+            }
+            const casted = try sema.coerce(block, sentinel_ty, sentinel_opt, sentinel_src);
             break :s try sema.resolveConstDefinedValue(block, sentinel_src, casted, .{
-                .needed_comptime_reason = "slice sentinel must be comptime-known",
+                .needed_comptime_reason = "slice sentinel value must be comptime-known",
             });
         }
         // If we are slicing to the end of something that is sentinel-terminated
@@ -32343,11 +32330,7 @@ fn analyzeSlice(
         assert(!block.is_comptime);
         try sema.requireRuntimeBlock(block, src, runtime_src.?);
         const ok = try block.addBinOp(.cmp_lte, start, end);
-        if (!sema.mod.comp.formatted_panics) {
-            try sema.addSafetyCheck(block, src, ok, .start_index_greater_than_end);
-        } else {
-            try sema.safetyCheckFormatted(block, src, ok, "panicStartGreaterThanEnd", &.{ start, end });
-        }
+        try sema.addSafetyCheckWithArgs(block, src, ok, .start_index_greater_than_end, start, end);
     }
     const new_len = if (by_length)
         try sema.coerce(block, Type.usize, uncasted_end_opt, end_src)
@@ -38137,3 +38120,52 @@ fn ptrType(sema: *Sema, info: InternPool.Key.PtrType) CompileError!Type {
     }
     return sema.mod.ptrType(info);
 }
+
+//// TODO: later use std.builtin.PanicCause
+///// This data structure is used by the Zig language code generation and
+///// therefore must be kept in sync with the compiler implementation.
+//pub const PanicCause = union(enum) {
+//    msg: []const u8,
+//    unreach,
+//    unwrap_null,
+//    cast_to_null,
+//    incorrect_alignment,
+//    invalid_error_code,
+//    cast_truncated_data,
+//    negative_to_unsigned,
+//    integer_overflow,
+//    shl_overflow,
+//    shr_overflow,
+//    div_by_zero,
+//    exact_div_remainder,
+//    inactive_union_field: struct {
+//        active: []const u8,
+//        accessed: []const u8,
+//    },
+//    integer_part_out_of_bounds,
+//    corrupt_switch,
+//    shift_rhs_too_big,
+//    invalid_enum_value,
+//    sentinel_mismatch_usize: struct {
+//        expected: usize,
+//        actual: usize,
+//    },
+//    sentinel_mismatch_isize: struct {
+//        expected: isize,
+//        actual: isize,
+//    },
+//    sentinel_mismatch_other,
+//    unwrap_error: anyerror,
+//    index_out_of_bounds: struct {
+//        index: usize,
+//        len: usize,
+//    },
+//    start_index_greater_than_end: struct {
+//        start: usize,
+//        end: usize,
+//    },
+//    for_len_mismatch,
+//    memcpy_len_mismatch,
+//    memcpy_alias,
+//    noreturn_fn_returned,
+//};

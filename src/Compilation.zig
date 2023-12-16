@@ -115,7 +115,6 @@ debug_compile_errors: bool,
 job_queued_compiler_rt_lib: bool = false,
 job_queued_compiler_rt_obj: bool = false,
 alloc_failure_occurred: bool = false,
-formatted_panics: bool = false,
 last_update_was_cache_hit: bool = false,
 
 c_source_files: []const CSourceFile,
@@ -887,7 +886,6 @@ pub const InitOptions = struct {
     use_clang: ?bool = null,
     single_threaded: ?bool = null,
     strip: ?bool = null,
-    formatted_panics: ?bool = null,
     rdynamic: bool = false,
     function_sections: bool = false,
     data_sections: bool = false,
@@ -1446,7 +1444,6 @@ pub fn create(gpa: Allocator, options: InitOptions) !*Compilation {
             .Debug => @as(u8, 0),
             else => @as(u8, 3),
         };
-        const formatted_panics = options.formatted_panics orelse (options.optimize_mode == .Debug);
 
         const error_limit = options.error_limit orelse (std.math.maxInt(u16) - 1);
 
@@ -1546,7 +1543,6 @@ pub fn create(gpa: Allocator, options: InitOptions) !*Compilation {
             hash.addOptionalBytes(options.test_filter);
             hash.addOptionalBytes(options.test_name_prefix);
             hash.add(options.skip_linker_dependencies);
-            hash.add(formatted_panics);
             hash.add(options.emit_h != null);
             hash.add(error_limit);
             hash.addOptional(options.want_structured_cfg);
@@ -2010,7 +2006,6 @@ pub fn create(gpa: Allocator, options: InitOptions) !*Compilation {
             .owned_link_dir = owned_link_dir,
             .color = options.color,
             .reference_trace = options.reference_trace,
-            .formatted_panics = formatted_panics,
             .time_report = options.time_report,
             .stack_report = options.stack_report,
             .unwind_tables = unwind_tables,
@@ -2744,7 +2739,6 @@ fn addNonIncrementalStuffToCacheManifest(comp: *Compilation, man: *Cache.Manifes
         man.hash.addOptionalBytes(comp.test_filter);
         man.hash.addOptionalBytes(comp.test_name_prefix);
         man.hash.add(comp.bin_file.options.skip_linker_dependencies);
-        man.hash.add(comp.formatted_panics);
         man.hash.add(mod.emit_h != null);
         man.hash.add(mod.error_limit);
         man.hash.addOptional(comp.bin_file.options.want_structured_cfg);

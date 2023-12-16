@@ -1,8 +1,7 @@
 const std = @import("std");
 
-pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    _ = stack_trace;
-    if (std.mem.eql(u8, message, "sentinel mismatch: expected 0, found 4")) {
+pub fn panic(cause: std.builtin.PanicCause, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    if (cause == .sentinel_mismatch_usize and cause.sentinel_mismatch_usize.expected == 0 and cause.sentinel_mismatch_usize.actual == 4) {
         std.process.exit(0);
     }
     std.process.exit(1);

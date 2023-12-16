@@ -31,32 +31,6 @@ pub const subsystem: ?std.Target.SubSystem = blk: {
 pub const StackTrace = struct {
     index: usize,
     instruction_addresses: []usize,
-
-    pub fn format(
-        self: StackTrace,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        if (fmt.len != 0) std.fmt.invalidFmtError(fmt, self);
-
-        // TODO: re-evaluate whether to use format() methods at all.
-        // Until then, avoid an error when using GeneralPurposeAllocator with WebAssembly
-        // where it tries to call detectTTYConfig here.
-        if (builtin.os.tag == .freestanding) return;
-
-        _ = options;
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const debug_info = std.debug.getSelfDebugInfo() catch |err| {
-            return writer.print("\nUnable to print stack trace: Unable to open debug info: {s}\n", .{@errorName(err)});
-        };
-        const tty_config = std.io.tty.detectConfig(std.io.getStdErr());
-        try writer.writeAll("\n");
-        std.debug.writeStackTrace(self, writer, arena.allocator(), debug_info, tty_config) catch |err| {
-            try writer.print("Unable to print stack trace: {s}\n", .{@errorName(err)});
-        };
-    }
 };
 
 /// This data structure is used by the Zig language code generation and
@@ -717,7 +691,7 @@ pub const TestFn = struct {
 
 /// This function type is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub const PanicFn = fn ([]const u8, ?*StackTrace, ?usize) noreturn;
+pub const PanicFn = fn (PanicCause, ?*StackTrace, ?usize) noreturn;
 
 /// This function is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
@@ -728,9 +702,108 @@ else if (@hasDecl(root, "os") and @hasDecl(root.os, "panic"))
 else
     default_panic;
 
+/// This data structure is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
+pub const PanicCause = union(enum) {
+    msg: []const u8,
+    unreach,
+    unwrap_null,
+    cast_to_null,
+    incorrect_alignment,
+    invalid_error_code,
+    cast_truncated_data,
+    negative_to_unsigned,
+    integer_overflow,
+    shl_overflow,
+    shr_overflow,
+    div_by_zero,
+    exact_div_remainder,
+    inactive_union_field: struct {
+        active: []const u8,
+        accessed: []const u8,
+    },
+    integer_part_out_of_bounds,
+    corrupt_switch,
+    shift_rhs_too_big,
+    invalid_enum_value,
+    sentinel_mismatch_usize: struct {
+        expected: usize,
+        actual: usize,
+    },
+    sentinel_mismatch_isize: struct {
+        expected: isize,
+        actual: isize,
+    },
+    sentinel_mismatch_other,
+    unwrap_error: anyerror,
+    index_out_of_bounds: struct {
+        index: usize,
+        len: usize,
+    },
+    start_index_greater_than_end: struct {
+        start: usize,
+        end: usize,
+    },
+    for_len_mismatch,
+    memcpy_len_mismatch,
+    memcpy_alias,
+    noreturn_fn_returned,
+};
+
+// TODO: should we not use std.fmt.bufPrint and instead print everything by hand?
+fn printPanicCause(panic_cause: PanicCause, buf: []u8) []const u8 {
+    return switch (panic_cause) {
+        .msg => |msg| msg,
+        .unreach => "reached unreachable code",
+        .unwrap_null => "attempt to use null value",
+        .cast_to_null => "cast causes pointer to be null",
+        .incorrect_alignment => "incorrect alignment",
+        .invalid_error_code => "invalid error code",
+        .cast_truncated_data => "integer cast truncated bits",
+        .negative_to_unsigned => "attempt to cast negative value to unsigned integer",
+        .integer_overflow => "integer overflow",
+        .shl_overflow => "left shift overflowed bits",
+        .shr_overflow => "right shift overflowed bits",
+        .div_by_zero => "division by zero",
+        .exact_div_remainder => "exact division produced remainder",
+        .inactive_union_field => |fields| {
+            return std.fmt.bufPrint(buf, "access of inactive union field: active={s}, accessed={s}", .{ fields.active, fields.accessed }) catch {
+                return "access of inactive union field (field names too long)";
+            };
+        },
+        .integer_part_out_of_bounds => "integer part of floating point value out of bounds",
+        .corrupt_switch => "switch on corrupt value",
+        .shift_rhs_too_big => "shift amount is greater than the type size",
+        .invalid_enum_value => "invalid enum value",
+        .sentinel_mismatch_usize => |sentinels| {
+            return std.fmt.bufPrint(buf, "sentinel mismatch: expected={}, found={}", .{ sentinels.expected, sentinels.actual }) catch unreachable;
+        },
+        .sentinel_mismatch_isize => |sentinels| {
+            return std.fmt.bufPrint(buf, "sentinel mismatch: expected={}, found={}", .{ sentinels.expected, sentinels.actual }) catch unreachable;
+        },
+        .sentinel_mismatch_other => "sentinel mismatch",
+        .unwrap_error => |err| {
+            return std.fmt.bufPrint(buf, "attempt to unwrap error: {s}", .{@errorName(err)}) catch {
+                return "attempt to unwrap error (error name too long)";
+            };
+        },
+        .index_out_of_bounds => |index_and_len| {
+            return std.fmt.bufPrint(buf, "index out of bounds: index={d}, len={d}", .{ index_and_len.index, index_and_len.len }) catch unreachable;
+        },
+        .start_index_greater_than_end => "start index is larger than end index",
+        .for_len_mismatch => "for loop over objects with non-equal lengths",
+        .memcpy_len_mismatch => "@memcpy arguments have non-equal lengths",
+        .memcpy_alias => "@memcpy arguments alias",
+        .noreturn_fn_returned => "noreturn function returned",
+    };
+}
+
 /// This function is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub fn default_panic(msg: []const u8, error_return_trace: ?*StackTrace, ret_addr: ?usize) noreturn {
+pub fn default_panic(cause: PanicCause, stack_trace: ?*StackTrace, ret_addr: ?usize) noreturn {
+    var buf: [128]u8 = undefined;
+    const msg = printPanicCause(cause, &buf);
+
     @setCold(true);
 
     // For backends that cannot handle the language features depended on by the
@@ -816,69 +889,10 @@ pub fn default_panic(msg: []const u8, error_return_trace: ?*StackTrace, ret_addr
         },
         else => {
             const first_trace_addr = ret_addr orelse @returnAddress();
-            std.debug.panicImpl(error_return_trace, first_trace_addr, msg);
+            std.debug.panicImpl(stack_trace, first_trace_addr, msg);
         },
     }
 }
-
-pub fn checkNonScalarSentinel(expected: anytype, actual: @TypeOf(expected)) void {
-    if (!std.meta.eql(expected, actual)) {
-        panicSentinelMismatch(expected, actual);
-    }
-}
-
-pub fn panicSentinelMismatch(expected: anytype, actual: @TypeOf(expected)) noreturn {
-    @setCold(true);
-    std.debug.panicExtra(null, @returnAddress(), "sentinel mismatch: expected {any}, found {any}", .{ expected, actual });
-}
-
-pub fn panicUnwrapError(st: ?*StackTrace, err: anyerror) noreturn {
-    @setCold(true);
-    std.debug.panicExtra(st, @returnAddress(), "attempt to unwrap error: {s}", .{@errorName(err)});
-}
-
-pub fn panicOutOfBounds(index: usize, len: usize) noreturn {
-    @setCold(true);
-    std.debug.panicExtra(null, @returnAddress(), "index out of bounds: index {d}, len {d}", .{ index, len });
-}
-
-pub fn panicStartGreaterThanEnd(start: usize, end: usize) noreturn {
-    @setCold(true);
-    std.debug.panicExtra(null, @returnAddress(), "start index {d} is larger than end index {d}", .{ start, end });
-}
-
-pub fn panicInactiveUnionField(active: anytype, wanted: @TypeOf(active)) noreturn {
-    @setCold(true);
-    std.debug.panicExtra(null, @returnAddress(), "access of union field '{s}' while field '{s}' is active", .{ @tagName(wanted), @tagName(active) });
-}
-
-pub const panic_messages = struct {
-    pub const unreach = "reached unreachable code";
-    pub const unwrap_null = "attempt to use null value";
-    pub const cast_to_null = "cast causes pointer to be null";
-    pub const incorrect_alignment = "incorrect alignment";
-    pub const invalid_error_code = "invalid error code";
-    pub const cast_truncated_data = "integer cast truncated bits";
-    pub const negative_to_unsigned = "attempt to cast negative value to unsigned integer";
-    pub const integer_overflow = "integer overflow";
-    pub const shl_overflow = "left shift overflowed bits";
-    pub const shr_overflow = "right shift overflowed bits";
-    pub const divide_by_zero = "division by zero";
-    pub const exact_division_remainder = "exact division produced remainder";
-    pub const inactive_union_field = "access of inactive union field";
-    pub const integer_part_out_of_bounds = "integer part of floating point value out of bounds";
-    pub const corrupt_switch = "switch on corrupt value";
-    pub const shift_rhs_too_big = "shift amount is greater than the type size";
-    pub const invalid_enum_value = "invalid enum value";
-    pub const sentinel_mismatch = "sentinel mismatch";
-    pub const unwrap_error = "attempt to unwrap error";
-    pub const index_out_of_bounds = "index out of bounds";
-    pub const start_index_greater_than_end = "start index is larger than end index";
-    pub const for_len_mismatch = "for loop over objects with non-equal lengths";
-    pub const memcpy_len_mismatch = "@memcpy arguments have non-equal lengths";
-    pub const memcpy_alias = "@memcpy arguments alias";
-    pub const noreturn_returned = "'noreturn' function returned";
-};
 
 pub noinline fn returnError(st: *StackTrace) void {
     @setCold(true);

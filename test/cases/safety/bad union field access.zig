@@ -1,8 +1,7 @@
 const std = @import("std");
 
-pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    _ = stack_trace;
-    if (std.mem.eql(u8, message, "access of union field 'float' while field 'int' is active")) {
+pub fn panic(cause: std.builtin.PanicCause, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    if (cause == .inactive_union_field and std.mem.eql(u8, cause.inactive_union_field.active, "int") and std.mem.eql(u8, cause.inactive_union_field.accessed, "float")) {
         std.process.exit(0);
     }
     std.process.exit(1);

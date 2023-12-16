@@ -370,7 +370,7 @@ pub fn panicExtra(
             break :blk &buf;
         },
     };
-    std.builtin.panic(msg, trace, ret_addr);
+    std.builtin.panic(.{ .msg = msg }, trace, ret_addr);
 }
 
 /// Non-zero whenever the program triggered a panic.

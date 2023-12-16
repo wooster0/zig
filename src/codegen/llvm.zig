@@ -2823,7 +2823,7 @@ pub const Object = struct {
                 if (Type.fromInterned(fn_info.return_type).isError(mod) and
                     o.module.comp.bin_file.options.error_return_tracing)
                 {
-                    const ptr_ty = try mod.singleMutPtrType(try o.getStackTraceType());
+                    const ptr_ty = try mod.singleMutPtrType(try o.getBuiltinType("StackTrace"));
                     try param_di_types.append(try o.lowerDebugType(ptr_ty, .full));
                 }
 
@@ -2896,7 +2896,7 @@ pub const Object = struct {
         );
     }
 
-    fn getStackTraceType(o: *Object) Allocator.Error!Type {
+    fn getBuiltinType(o: *Object, name: []const u8) Allocator.Error!Type {
         const mod = o.module;
 
         const std_mod = mod.main_mod.deps.get("std").?;
@@ -2907,17 +2907,17 @@ pub const Object = struct {
         const builtin_decl = std_namespace.decls
             .getKeyAdapted(builtin_str, Module.DeclAdapter{ .mod = mod }).?;
 
-        const stack_trace_str = try mod.intern_pool.getOrPutString(mod.gpa, "StackTrace");
+        const type_str = try mod.intern_pool.getOrPutString(mod.gpa, name);
         // buffer is only used for int_type, `builtin` is a struct.
         const builtin_ty = mod.declPtr(builtin_decl).val.toType();
         const builtin_namespace = builtin_ty.getNamespace(mod).?;
-        const stack_trace_decl_index = builtin_namespace.decls
-            .getKeyAdapted(stack_trace_str, Module.DeclAdapter{ .mod = mod }).?;
-        const stack_trace_decl = mod.declPtr(stack_trace_decl_index);
+        const type_decl_index = builtin_namespace.decls
+            .getKeyAdapted(type_str, Module.DeclAdapter{ .mod = mod }).?;
+        const type_decl = mod.declPtr(type_decl_index);
 
-        // Sema should have ensured that StackTrace was analyzed.
-        assert(stack_trace_decl.has_tv);
-        return stack_trace_decl.val.toType();
+        // Sema should have ensured that the type was analyzed.
+        assert(type_decl.has_tv);
+        return type_decl.val.toType();
     }
 
     fn allocTypeName(o: *Object, ty: Type) Allocator.Error![:0]const u8 {
@@ -3681,7 +3681,7 @@ pub const Object = struct {
         if (Type.fromInterned(fn_info.return_type).isError(mod) and
             mod.comp.bin_file.options.error_return_tracing)
         {
-            const ptr_ty = try mod.singleMutPtrType(try o.getStackTraceType());
+            const ptr_ty = try mod.singleMutPtrType(try o.getBuiltinType("StackTrace"));
             try llvm_params.append(o.gpa, try o.lowerType(ptr_ty));
         }
 
@@ -5409,27 +5409,30 @@ pub const FuncGen = struct {
         }
     }
 
-    fn buildSimplePanic(fg: *FuncGen, panic_id: Module.PanicId) !void {
+    fn buildSimplePanic(fg: *FuncGen, cause: @typeInfo(std.builtin.PanicCause).Union.tag_type.?) !void {
         const o = fg.dg.object;
         const mod = o.module;
-        const msg_decl_index = mod.panic_messages[@intFromEnum(panic_id)].unwrap().?;
-        const msg_decl = mod.declPtr(msg_decl_index);
-        const msg_len = msg_decl.ty.childType(mod).arrayLen(mod);
-        const msg_ptr = try o.lowerValue(try msg_decl.internValue(mod));
         const null_opt_addr_global = try fg.resolveNullOptUsize();
         const target = mod.getTarget();
-        const llvm_usize = try o.lowerType(Type.usize);
         // example:
         // call fastcc void @test2.panic(
-        //   ptr @builtin.panic_messages.integer_overflow__anon_987, ; msg.ptr
-        //   i64 16,                                                 ; msg.len
-        //   ptr null,                                               ; stack trace
-        //   ptr @2,                                                 ; addr (null ?usize)
+        //   u16 8,    ; panic_cause TODO: update with @sizeOf on the final PanicCause
+        //   ptr null, ; stack trace
+        //   ptr @2,   ; addr (null ?usize)
         // )
         const panic_func = mod.funcInfo(mod.panic_func_index);
         const panic_decl = mod.declPtr(panic_func.owner_decl);
         const fn_info = mod.typeToFunc(panic_decl.ty).?;
         const panic_global = try o.resolveLlvmFunction(panic_func.owner_decl);
+        const panic_cause_ty = try o.getBuiltinType("PanicCause");
+        const panic_cause = switch (cause) {
+            .integer_overflow => panic_cause: {
+                const field_index = panic_cause_ty.enumFieldIndex(try mod.intern_pool.getOrPutString(mod.gpa, "integer_overflow"), mod).?;
+                const panic_cause = try fg.unionInit(panic_cause_ty, field_index, Air.Inst.Ref.void_value);
+                break :panic_cause panic_cause;
+            },
+            else => unreachable,
+        };
         _ = try fg.wip.call(
             .normal,
             toLlvmCallConv(fn_info.cc, target),
@@ -5437,8 +5440,7 @@ pub const FuncGen = struct {
             panic_global.typeOf(&o.builder),
             panic_global.toValue(&o.builder),
             &.{
-                msg_ptr.toValue(),
-                try o.builder.intValue(llvm_usize, msg_len),
+                panic_cause,
                 try o.builder.nullValue(.ptr),
                 null_opt_addr_global.toValue(),
             },
@@ -10028,12 +10030,15 @@ pub const FuncGen = struct {
     }
 
     fn airUnionInit(self: *FuncGen, inst: Air.Inst.Index) !Builder.Value {
+        const ty_pl = self.air.instructions.items(.data)[@intFromEnum(inst)].ty_pl;
+        const extra = self.air.extraData(Air.UnionInit, ty_pl.payload).data;
+        return self.unionInit(self.typeOfIndex(inst), extra.field_index, extra.init);
+    }
+
+    fn unionInit(self: *FuncGen, union_ty: Type, field_index: u32, init: Air.Inst.Ref) !Builder.Value {
         const o = self.dg.object;
         const mod = o.module;
         const ip = &mod.intern_pool;
-        const ty_pl = self.air.instructions.items(.data)[@intFromEnum(inst)].ty_pl;
-        const extra = self.air.extraData(Air.UnionInit, ty_pl.payload).data;
-        const union_ty = self.typeOfIndex(inst);
         const union_llvm_ty = try o.lowerType(union_ty);
         const layout = union_ty.unionGetLayout(mod);
         const union_obj = mod.typeToUnion(union_ty).?;
@@ -10041,8 +10046,8 @@ pub const FuncGen = struct {
         if (union_obj.getLayout(ip) == .Packed) {
             const big_bits = union_ty.bitSize(mod);
             const int_llvm_ty = try o.builder.intType(@intCast(big_bits));
-            const field_ty = Type.fromInterned(union_obj.field_types.get(ip)[extra.field_index]);
-            const non_int_val = try self.resolveInst(extra.init);
+            const field_ty = Type.fromInterned(union_obj.field_types.get(ip)[field_index]);
+            const non_int_val = try self.resolveInst(init);
             const small_int_ty = try o.builder.intType(@intCast(field_ty.bitSize(mod)));
             const small_int_val = if (field_ty.isPtrAtRuntime(mod))
                 try self.wip.cast(.ptrtoint, non_int_val, small_int_ty, "")
@@ -10053,7 +10058,7 @@ pub const FuncGen = struct {
 
         const tag_int = blk: {
             const tag_ty = union_ty.unionTagTypeHypothetical(mod);
-            const union_field_name = union_obj.field_names.get(ip)[extra.field_index];
+            const union_field_name = union_obj.field_names.get(ip)[field_index];
             const enum_field_index = tag_ty.enumFieldIndex(union_field_name, mod).?;
             const tag_val = try mod.enumValueFieldIndex(tag_ty, enum_field_index);
             const tag_int_val = try tag_val.intFromEnum(tag_ty, mod);
@@ -10073,11 +10078,11 @@ pub const FuncGen = struct {
         // the fields appropriately.
         const alignment = layout.abi_align.toLlvm();
         const result_ptr = try self.buildAllocaWorkaround(union_ty, alignment);
-        const llvm_payload = try self.resolveInst(extra.init);
-        const field_ty = Type.fromInterned(union_obj.field_types.get(ip)[extra.field_index]);
+        const llvm_payload = try self.resolveInst(init);
+        const field_ty = Type.fromInterned(union_obj.field_types.get(ip)[field_index]);
         const field_llvm_ty = try o.lowerType(field_ty);
         const field_size = field_ty.abiSize(mod);
-        const field_align = mod.unionFieldNormalAlignment(union_obj, extra.field_index);
+        const field_align = mod.unionFieldNormalAlignment(union_obj, field_index);
         const llvm_usize = try o.lowerType(Type.usize);
         const usize_zero = try o.builder.intValue(llvm_usize, 0);
         const i32_zero = try o.builder.intValue(.i32, 0);
@@ -11762,3 +11767,52 @@ fn constraintAllowsRegister(constraint: []const u8) bool {
         }
     } else return false;
 }
+
+//// TODO: later use std.builtin.PanicCause
+///// This data structure is used by the Zig language code generation and
+///// therefore must be kept in sync with the compiler implementation.
+//pub const PanicCause = union(enum) {
+//    msg: []const u8,
+//    unreach,
+//    unwrap_null,
+//    cast_to_null,
+//    incorrect_alignment,
+//    invalid_error_code,
+//    cast_truncated_data,
+//    negative_to_unsigned,
+//    integer_overflow,
+//    shl_overflow,
+//    shr_overflow,
+//    div_by_zero,
+//    exact_div_remainder,
+//    inactive_union_field: struct {
+//        active: []const u8,
+//        accessed: []const u8,
+//    },
+//    integer_part_out_of_bounds,
+//    corrupt_switch,
+//    shift_rhs_too_big,
+//    invalid_enum_value,
+//    sentinel_mismatch_usize: struct {
+//        expected: usize,
+//        actual: usize,
+//    },
+//    sentinel_mismatch_isize: struct {
+//        expected: isize,
+//        actual: isize,
+//    },
+//    sentinel_mismatch_other,
+//    unwrap_error: anyerror,
+//    index_out_of_bounds: struct {
+//        index: usize,
+//        len: usize,
+//    },
+//    start_index_greater_than_end: struct {
+//        start: usize,
+//        end: usize,
+//    },
+//    for_len_mismatch,
+//    memcpy_len_mismatch,
+//    memcpy_alias,
+//    noreturn_fn_returned,
+//};
