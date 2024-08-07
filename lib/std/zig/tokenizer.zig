@@ -587,7 +587,7 @@ pub const Tokenizer = struct {
                         result.tag = .identifier;
                         state = .string_literal;
                     },
-                    'a'...'z', 'A'...'Z', '_' => {
+                    'a'...'z', 'A'...'Z' => {
                         state = .builtin;
                         result.tag = .builtin;
                     },
@@ -736,7 +736,7 @@ pub const Tokenizer = struct {
                     },
                 },
                 .builtin => switch (c) {
-                    'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
+                    'a'...'z', 'A'...'Z' => continue,
                     else => break,
                 },
                 .backslash => switch (c) {
